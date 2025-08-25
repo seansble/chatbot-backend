@@ -1,0 +1,29 @@
+# 환경변수 (절대 업로드 금지!)
+.env
+.env.local
+
+# 가상환경
+venv/
+env/
+
+# Python 캐시
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 메모 파일
+github명령어.txt
+*.txt
+
+# 폴더들
+backend/
+frontend/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
