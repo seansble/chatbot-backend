@@ -492,6 +492,22 @@ def postprocess_answer(answer):
     
     return answer
 
+# 루트 경로 추가 - Railway 헬스체크용
+@app.route("/", methods=["GET"])
+def index():
+    """루트 경로 - Railway 헬스체크용"""
+    return jsonify({
+        "service": "Unemployment Benefits Chat API",
+        "status": "running",
+        "version": "2025.08.28",
+        "endpoints": {
+            "health": "/health",
+            "chat": "/api/chat",
+            "feedback": "/api/feedback",
+            "calculator": "/api/mark-calculator-used"
+        }
+    })
+
 @app.route("/health", methods=["GET"])
 def health_check():
     """헬스체크 엔드포인트"""
@@ -699,4 +715,5 @@ for rule in app.url_map.iter_rules():
     print(f"  {rule.endpoint}: {rule.rule}")
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
