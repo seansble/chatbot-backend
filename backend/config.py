@@ -5,11 +5,11 @@ from dotenv import load_dotenv
 # .env 파일이 있으면 로드 (로컬 개발용)
 load_dotenv()
 
-# 환경변수 디버깅 - Railway에서 뭐가 있는지 확인
+# 환경변수 디버깅 부분을 찾아서 수정
 print("=== ENVIRONMENT VARIABLES DEBUG ===")
 for key in sorted(os.environ.keys()):
     if 'API' in key.upper() or 'KEY' in key.upper():
-        print(f"{key}: {os.environ[key][:10]}...")  # 처음 10자만 표시
+        print(f"{key}: [HIDDEN]")  # 값을 완전히 숨김
 
 # API Key 가져오기 (환경변수에서)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")

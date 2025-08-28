@@ -42,7 +42,7 @@ CORS(app,
 limiter = Limiter(
     app=app,
     key_func=get_remote_address,
-    default_limits=["1000 per hour"],
+    default_limits=["100 per hour"],  # 1000 → 100으로 줄이기
     storage_uri="memory://"
 )
 
@@ -602,8 +602,8 @@ def reload_faq():
     return jsonify({"status": "reloaded", "count": len(FAQS)})
 
 @app.route("/api/chat", methods=["POST"])
-@limiter.limit("10 per minute")
-@limiter.limit("100 per hour", key_func=get_remote_address)
+@limiter.limit("5 per minute")
+@limiter.limit("50 per hour", key_func=get_remote_address)
 def chat():
     try:
         question = request.json.get("question", "")
