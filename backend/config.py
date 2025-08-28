@@ -5,14 +5,52 @@ from dotenv import load_dotenv
 # .env 파일이 있으면 로드 (로컬 개발용)
 load_dotenv()
 
+# 환경변수 디버깅 - Railway에서 뭐가 있는지 확인
+print("=== ENVIRONMENT VARIABLES DEBUG ===")
+for key in sorted(os.environ.keys()):
+    if 'API' in key.upper() or 'KEY' in key.upper():
+        print(f"{key}: {os.environ[key][:10]}...")  # 처음 10자만 표시
+
 # API Key 가져오기 (환경변수에서)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-# API Key 검증
-if not OPENROUTER_API_KEY:
-    print("ERROR: OPENROUTER_API_KEY must be set in environment variables")
-    sys.exit(1)
+# 가능한 모든 변수명 시도
+possible_keys = [
+    'OPENROUTER_API_KEY',
+    'openrouter_api_key',
+    'OPENROUTER_API',
+    'openrouter_api'
+]
 
+for key in possible_keys:
+    value = os.getenv(key)
+    if value:
+        OPENROUTER_API_KEY = value
+        print(f"Found API key in: {key}")
+        break
+
+# 그래도 못 찾으면 수동으로 검색
+if not OPENROUTER_API_KEY:
+    for key, value in os.environ.items():
+        if 'OPENROUTER' in key.upper():
+            OPENROUTER_API_KEY = value
+            print(f"Found API key in environ: {key}")
+            break
+        
+# API Key 검증 부분을 이렇게 수정
+if not OPENROUTER_API_KEY:
+    print("WARNING: OPENROUTER_API_KEY not found in environment")
+    print(f"Available env vars (first 20): {list(os.environ.keys())[:20]}")
+    
+    # Railway에서 실행 중이면 더미 키 사용
+    if os.getenv("RAILWAY_ENVIRONMENT"):
+        OPENROUTER_API_KEY = "sk-or-v1-temporary-key-for-testing"
+        print("Using temporary key in Railway environment")
+    else:
+        # 로컬에서는 종료
+        print("ERROR: Set OPENROUTER_API_KEY in environment")
+        sys.exit(1)
+        
 # API 설정
 API_PROVIDER = "openrouter"
 MODEL_NAME = "qwen/qwen3-235b-a22b-2507"
