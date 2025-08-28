@@ -2,12 +2,15 @@ import os
 import sys
 from dotenv import load_dotenv
 
+# .env 파일이 있으면 로드 (로컬 개발용)
 load_dotenv()
 
-# API Key 검증
+# API Key 가져오기 (환경변수에서)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+
+# API Key 검증
 if not OPENROUTER_API_KEY:
-    print("ERROR: OPENROUTER_API_KEY must be set in .env file")
+    print("ERROR: OPENROUTER_API_KEY must be set in environment variables")
     sys.exit(1)
 
 # API 설정
