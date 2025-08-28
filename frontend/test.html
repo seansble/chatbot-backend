@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>실업급여 챗봇 테스트 - Qwen3</title>
+    <style>
+        body { 
+            font-family: 'Noto Sans KR', Arial, sans-serif; 
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container { 
+            max-width: 800px; 
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            border-bottom: 2px solid #4CAF50;
+            padding-bottom: 10px;
+        }
+        
+        /* 디버그 패널 */
+        .debug-panel {
+            background-color: #f0f0f0;
+            border: 2px dashed #999;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+        }
+        .debug-panel h3 {
+            margin-top: 0;
+            color: #666;
+        }
+        .debug-info {
+            font-family: monospace;
+            font-size: 12px;
+            background: white;
+            padding: 10px;
+            border-radius: 3px;
+            margin: 10px 0;
+        }
+        .debug-buttons {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .debug-btn {
+            padding: 8px 15px;
+            font-size: 12px;
+            background: #2196F3;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .debug-btn:hover {
+            background: #1976D2;
+        }
+        .debug-btn.danger {
+            background: #f44336;
+        }
+        .debug-btn.danger:hover {
+            background: #d32f2f;
+        }
+        .debug-btn.success {
+            background: #4CAF50;
+        }
+        .mode-indicator {
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 3px;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+        .mode-dev {
+            background: #ffeb3b;
+            color: #333;
+        }
+        .mode-prod {
+            background: #4CAF50;
+            color: white;
+        }
+        
+        .model-badge {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 3px 8px;
+            border-radius: 3px;
+            font-size: 12px;
+            margin-left: 10px;
+        }
+        
+        .info-bar {
+            background-color: #e8f5e9;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .remaining-count {
+            font-weight: bold;
+            color: #2e7d32;
+        }
+        .input-wrapper {
+            position: relative;
+            margin-bottom: 20px;
+        }
+        #question {
+            width: 100%;
+            padding: 12px;
+            font-size: 16px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            box-sizing: border-box;
+        }
+        #question:focus {
+            outline: none;
+            border-color: #4CAF50;
+        }
+        .char-count {
+            position: absolute;
+            right: 10px;
+            bottom: -20px;
+            font-size: 12px;
+            color: #666;
+        }
+        .char-count.warning {
+            color: #ff9800;
+        }
+        .char-count.error {
+            color: #f44336;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 12px 30px;
+            font-size: 16px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        #response { 
+            margin-top: 20px; 
+            padding: 20px; 
+            border: 1px solid #ddd; 
+            border-radius: 5px;
+            min-height: 100px;
+            background-color: #fafafa;
+            white-space: pre-wrap;
+            line-height: 1.6;
+        }
+        
+        /* 구조화된 답변 스타일 */
+        #response .result-box {
+            background: #e3f2fd;
+            padding: 10px;
+            border-left: 4px solid #2196F3;
+            margin-bottom: 10px;
+        }
+        #response .basis-box {
+            background: #f3e5f5;
+            padding: 10px;
+            border-left: 4px solid #9c27b0;
+            margin-bottom: 10px;
+        }
+        #response .detail-box {
+            background: #fff3e0;
+            padding: 10px;
+            border-left: 4px solid #ff9800;
+            margin-bottom: 10px;
+        }
+        #response .docs-box {
+            background: #e8f5e9;
+            padding: 10px;
+            border-left: 4px solid #4caf50;
+            margin-bottom: 10px;
+        }
+        
+        .loading {
+            color: #4CAF50;
+            font-style: italic;
+        }
+        .error {
+            color: #f44336;
+            background-color: #ffebee;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .warning-message {
+            background-color: #fff3cd;
+            color: #856404;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+        
+        .toggle-debug {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: #333;
+            color: white;
+            padding: 10px;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 20px;
+            z-index: 1000;
+        }
+        
+        .sample-questions {
+            margin-top: 10px;
+            padding: 10px;
+            background: #f9f9f9;
+            border-radius: 5px;
+        }
+        .sample-btn {
+            display: inline-block;
+            margin: 3px;
+            padding: 5px 10px;
+            background: #e0e0e0;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .sample-btn:hover {
+            background: #d0d0d0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>실업급여 챗봇 테스트 
+            <span class="mode-indicator" id="modeIndicator">개발 모드</span>
+            <span class="model-badge">Qwen3-235B</span>
+        </h1>
+        
+        <!-- 디버그 패널 -->
+        <div class="debug-panel" id="debugPanel">
+            <h3>🔧 디버깅 패널 (Qwen3 모델)</h3>
+            
+            <div class="debug-info">
+                <strong>현재 상태:</strong><br>
+                모델: Qwen3-235B-A22B-Instruct-2507<br>
+                API: OpenRouter<br>
+                지문(Fingerprint): <span id="fpDisplay">-</span><br>
+                계산기 사용: <span id="calcStatus">❌</span><br>
+                계산 데이터: <span id="calcDataStatus">없음</span><br>
+                오늘 사용: <span id="usageCount">0</span>회<br>
+                쿠키: <span id="cookieStatus">없음</span><br>
+                모드: <span id="currentMode">-</span>
+            </div>
+            
+            <div class="debug-buttons">
+                <button class="debug-btn success" onclick="simulateCalculator()">계산기 사용 시뮬레이션</button>
+                <button class="debug-btn success" onclick="addCalcData()">계산 데이터 추가</button>
+                <button class="debug-btn" onclick="changeFingerprint()">지문 변경 (새 사용자)</button>
+                <button class="debug-btn danger" onclick="clearAllData()">모든 데이터 초기화</button>
+                <button class="debug-btn danger" onclick="clearCookies()">쿠키 초기화</button>
+                <button class="debug-btn" onclick="toggleMode()">모드 전환</button>
+                <button class="debug-btn" onclick="showStorageInfo()">Storage 정보 보기</button>
+            </div>
+            
+            <div class="debug-info" style="margin-top: 10px;">
+                <strong>테스트 시나리오:</strong><br>
+                1. "계산기 미사용" 테스트: 초기화 → 질문 전송<br>
+                2. "계산기 사용" 테스트: 계산기 시뮬레이션 → 질문 전송<br>
+                3. "3회 제한" 테스트: 계산기 시뮬레이션 → 4번 질문<br>
+                4. "새 사용자" 테스트: 지문 변경 → 다시 시작<br>
+                5. "쿠키 우회" 테스트: 쿠키 삭제 → IP+지문으로 여전히 차단 확인
+            </div>
+        </div>
+        
+        <div class="info-bar">
+            <span>💡 실업급여, 구직급여, 고용보험 관련 질문만 답변 가능합니다</span>
+            <span class="remaining-count" id="remainingCount">오늘 남은 질문: 3회</span>
+        </div>
+        
+        <div class="input-wrapper">
+            <input 
+                type="text" 
+                id="question" 
+                placeholder="실업급여 관련 질문을 입력하세요 (최대 150자)" 
+                maxlength="150"
+            >
+            <span class="char-count" id="charCount">0/150</span>
+        </div>
+        
+        <button onclick="sendQuestion()" id="sendBtn">전송</button>
+        
+        <div class="sample-questions">
+            <strong>예시 질문:</strong><br>
+            <button class="sample-btn" onclick="setSampleQuestion('계약직 3년 일했는데 계약만료됐어요. 실업급여 받을 수 있나요?')">계약만료</button>
+            <button class="sample-btn" onclick="setSampleQuestion('육아휴직 중 회사가 폐업했는데 어떻게 되나요?')">육아휴직</button>
+            <button class="sample-btn" onclick="setSampleQuestion('월급 400만원이었는데 얼마나 받을 수 있나요?')">급여 계산</button>
+            <button class="sample-btn" onclick="setSampleQuestion('편의점 알바하면서 정규직 다니다가 정규직 회사가 폐업했어요')">이중근무</button>
+            <button class="sample-btn" onclick="setSampleQuestion('52세인데 5년 근무하고 권고사직당했어요')">50세 이상</button>
+        </div>
+        
+        <div id="response"></div>
+    </div>
+    
+    <!-- 디버그 토글 버튼 -->
+    <div class="toggle-debug" onclick="toggleDebugPanel()">🛠</div>
+
+    <script>
+        const questionInput = document.getElementById('question');
+        const charCountSpan = document.getElementById('charCount');
+        const sendBtn = document.getElementById('sendBtn');
+        const responseDiv = document.getElementById('response');
+        const remainingCountSpan = document.getElementById('remainingCount');
+        
+        let isDevMode = true; // 개발 모드 플래그
+        let currentUsageCount = 0; // 현재 사용 횟수
+        
+        // 브라우저 핑거프린팅
+        function getFingerprint() {
+            if (isDevMode) {
+                return "DEV_FINGERPRINT"; // 개발 모드일 때
+            }
+            const fp = {
+                s: screen.width + 'x' + screen.height,
+                t: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                l: navigator.language,
+                c: navigator.hardwareConcurrency || 2,
+                p: navigator.platform,
+                v: navigator.vendor
+            };
+            return btoa(JSON.stringify(fp));
+        }
+        
+        // 쿠키 체크
+        function checkCookie() {
+            const cookies = document.cookie.split(';');
+            for (let cookie of cookies) {
+                if (cookie.trim().startsWith('usage_token=')) {
+                    return cookie.trim().substring(12);
+                }
+            }
+            return null;
+        }
+        
+        // 계산기 데이터 가져오기
+        function getCalculatorData() {
+            const calcData = sessionStorage.getItem('calcData');
+            return calcData ? JSON.parse(calcData) : null;
+        }
+        
+        // 계산기 사용 체크
+        function checkCalculatorUsage() {
+            const fingerprint = getFingerprint();
+            const calcUsed = sessionStorage.getItem('calc_used_' + fingerprint);
+            
+            updateDebugInfo();
+            return calcUsed ? true : false;
+        }
+        
+        // 샘플 질문 설정
+        function setSampleQuestion(question) {
+            questionInput.value = question;
+            const event = new Event('input');
+            questionInput.dispatchEvent(event);
+        }
+        
+        // 디버그 함수들
+        function simulateCalculator() {
+            const fingerprint = getFingerprint();
+            sessionStorage.setItem('calc_used_' + fingerprint, 'true');
+            
+            // 서버에 알림 (쿠키 지원)
+            fetch('http://localhost:5000/api/mark-calculator-used', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ fingerprint: fingerprint }),
+                credentials: 'include'  // 쿠키 포함
+            }).then(() => {
+                alert('계산기 사용 시뮬레이션 완료!');
+                updateDebugInfo();
+            });
+        }
+        
+        function addCalcData() {
+            const calcData = {
+                type: 'unemployment',
+                data: '40세/180일/63,104원',
+                timestamp: new Date().toISOString()
+            };
+            sessionStorage.setItem('calcData', JSON.stringify(calcData));
+            alert('계산 데이터 추가 완료!');
+            updateDebugInfo();
+        }
+        
+        function changeFingerprint() {
+            isDevMode = false;
+            const newFp = 'USER_' + Math.random().toString(36).substr(2, 9);
+            alert('새 지문으로 변경됨. 일반 모드로 전환됩니다.');
+            updateDebugInfo();
+            location.reload();
+        }
+        
+        function clearAllData() {
+            if (confirm('모든 데이터를 초기화하시겠습니까?')) {
+                sessionStorage.clear();
+                localStorage.clear();
+                document.cookie.split(";").forEach(function(c) { 
+                    document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/"); 
+                });
+                alert('초기화 완료!');
+                location.reload();
+            }
+        }
+        
+        function clearCookies() {
+            document.cookie.split(";").forEach(function(c) { 
+                document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/"); 
+            });
+            alert('쿠키 초기화 완료!');
+            updateDebugInfo();
+        }
+        
+        function toggleMode() {
+            isDevMode = !isDevMode;
+            document.getElementById('modeIndicator').textContent = isDevMode ? '개발 모드' : '일반 모드';
+            document.getElementById('modeIndicator').className = isDevMode ? 'mode-indicator mode-dev' : 'mode-indicator mode-prod';
+            updateDebugInfo();
+        }
+        
+        function showStorageInfo() {
+            const info = {
+                sessionStorage: Object.keys(sessionStorage),
+                localStorage: Object.keys(localStorage),
+                cookies: document.cookie
+            };
+            alert('Storage 정보:\n' + JSON.stringify(info, null, 2));
+        }
+        
+        function toggleDebugPanel() {
+            const panel = document.getElementById('debugPanel');
+            panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+        }
+        
+        function updateDebugInfo() {
+            const fp = getFingerprint();
+            const cookie = checkCookie();
+            document.getElementById('fpDisplay').textContent = fp.substring(0, 20) + '...';
+            document.getElementById('calcStatus').textContent = sessionStorage.getItem('calc_used_' + fp) ? '✅' : '❌';
+            document.getElementById('calcDataStatus').textContent = getCalculatorData() ? '있음' : '없음';
+            document.getElementById('cookieStatus').textContent = cookie ? cookie.substring(0, 10) + '...' : '없음';
+            document.getElementById('currentMode').textContent = isDevMode ? '개발 모드' : '일반 모드';
+            document.getElementById('usageCount').textContent = currentUsageCount;
+        }
+        
+        // 글자수 카운터
+        questionInput.addEventListener('input', function() {
+            const length = this.value.length;
+            charCountSpan.textContent = `${length}/150`;
+            
+            if (length >= 150) {
+                charCountSpan.className = 'char-count error';
+            } else if (length >= 130) {
+                charCountSpan.className = 'char-count warning';
+            } else {
+                charCountSpan.className = 'char-count';
+            }
+        });
+        
+        // HTML 이스케이프 함수
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // 구조화된 답변 포맷팅
+        function formatStructuredResponse(text) {
+            // 【결과】 【근거】 【세부사항】 【필요서류】 등을 스타일링
+            let formatted = text;
+            formatted = formatted.replace(/【결과】/g, '<div class="result-box"><strong>【결과】</strong>');
+            formatted = formatted.replace(/【근거】/g, '</div><div class="basis-box"><strong>【근거】</strong>');
+            formatted = formatted.replace(/【세부사항】/g, '</div><div class="detail-box"><strong>【세부사항】</strong>');
+            formatted = formatted.replace(/【필요서류】/g, '</div><div class="docs-box"><strong>【필요서류】</strong>');
+            formatted = formatted.replace(/【주요 근거】/g, '</div><div class="basis-box"><strong>【주요 근거】</strong>');
+            formatted = formatted.replace(/【상황 분석】/g, '</div><div class="detail-box"><strong>【상황 분석】</strong>');
+            formatted = formatted.replace(/【계산】/g, '</div><div class="detail-box"><strong>【계산】</strong>');
+            formatted = formatted.replace(/【출처】/g, '</div><div class="basis-box"><strong>【출처】</strong>');
+            
+            // 마지막 div 닫기
+            if (formatted.includes('<div class="')) {
+                formatted += '</div>';
+            }
+            
+            // 첫 번째 div 앞 텍스트 처리
+            if (!formatted.startsWith('<div class="')) {
+                const firstDivIndex = formatted.indexOf('<div class="');
+                if (firstDivIndex > 0) {
+                    formatted = formatted.substring(firstDivIndex);
+                }
+            }
+            
+            return formatted;
+        }
+        
+        async function sendQuestion() {
+            const question = questionInput.value.trim();
+            
+            if (!question) {
+                alert('질문을 입력하세요');
+                return;
+            }
+            
+            if (question.length > 150) {
+                alert('질문은 150자 이내로 작성해주세요');
+                return;
+            }
+            
+            // 버튼 비활성화
+            sendBtn.disabled = true;
+            responseDiv.innerHTML = '<div class="loading">Qwen3 모델이 답변을 생성중...</div>';
+            
+            try {
+                const fingerprint = getFingerprint();
+                const calcData = getCalculatorData();
+                
+                const response = await fetch('http://localhost:5000/api/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ 
+                        question: question,
+                        fingerprint: fingerprint,
+                        calcData: calcData
+                    }),
+                    credentials: 'include'  // 쿠키 포함
+                });
+                
+                const data = await response.json();
+                
+                let html = '';
+                
+                if (data.error) {
+                    html = `<div class="error">${escapeHtml(data.error)}</div>`;
+                    
+                    if (data.redirect) {
+                        setTimeout(() => {
+                            if (confirm('계산기 페이지로 이동하시겠습니까?')) {
+                                window.location.href = data.redirect;
+                            }
+                        }, 1000);
+                    }
+                } else {
+                    // 구조화된 답변 포맷팅 적용
+                    const formattedAnswer = formatStructuredResponse(data.answer);
+                    html = `<div>${formattedAnswer}</div>`;
+                    
+                    // 출처 표시 (Qwen3는 보통 출처가 없음)
+                    if (data.sources && data.sources.length > 0) {
+                        html += '<div class="sources"><strong>참고 자료:</strong>';
+                        data.sources.forEach(source => {
+                            if (source.url) {
+                                html += `<a href="${escapeHtml(source.url)}" target="_blank" class="source-link">🔎 ${escapeHtml(source.title || source.url)}</a>`;
+                            }
+                        });
+                        html += '</div>';
+                    }
+                }
+                
+                // 남은 횟수 업데이트
+                if (data.remaining !== undefined) {
+                    remainingCountSpan.textContent = `오늘 남은 질문: ${data.remaining}회`;
+                    currentUsageCount = 3 - data.remaining;
+                    
+                    if (data.remaining === 0) {
+                        sendBtn.disabled = true;
+                        sendBtn.textContent = '내일 다시 이용 가능';
+                    }
+                }
+                
+                responseDiv.innerHTML = html;
+                updateDebugInfo();
+                
+            } catch (error) {
+                responseDiv.innerHTML = `<div class="error">오류 발생: ${escapeHtml(error.message)}</div>`;
+            } finally {
+                // 버튼 재활성화
+                if (!sendBtn.textContent.includes('내일')) {
+                    sendBtn.disabled = false;
+                }
+            }
+        }
+        
+        // 엔터키로 전송
+        questionInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter' && !sendBtn.disabled) {
+                sendQuestion();
+            }
+        });
+        
+        // 페이지 로드시 초기화
+        window.onload = function() {
+            updateDebugInfo();
+            console.log('Qwen3-235B-A22B-Instruct-2507 모델 준비 완료');
+        };
+    </script>
+</body>
+</html>
