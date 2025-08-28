@@ -35,13 +35,16 @@ app.config.update(
 )
 
 CORS(app, 
-     origins=['*'],
+     origins=['https://sudanghelp.co.kr', 'http://localhost:3000'],
      supports_credentials=True)
 
 # Rate Limiting 설정
+def get_real_ip():
+    return request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
+
 limiter = Limiter(
     app=app,
-    key_func=get_remote_address,
+    key_func=get_real_ip,
     default_limits=["100 per hour"],  # 1000 → 100으로 줄이기
     storage_uri="memory://"
 )
@@ -179,8 +182,7 @@ def detect_amount_intent(q: str) -> str:
 
 # 기존 함수들
 def get_user_keys(request, fingerprint):
-    """IP, 쿠키, 지문 모든 조합 반환"""
-    client_ip = request.remote_addr
+    client_ip = request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
     usage_cookie = request.cookies.get('usage_token')
     
     keys = {

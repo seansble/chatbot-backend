@@ -44,8 +44,8 @@ if not OPENROUTER_API_KEY:
     
     # Railway에서 실행 중이면 더미 키 사용
     if os.getenv("RAILWAY_ENVIRONMENT"):
-        OPENROUTER_API_KEY = "sk-or-v1-temporary-key-for-testing"
-        print("Using temporary key in Railway environment")
+        print("ERROR: API key must be set in Railway Variables")
+        sys.exit(1)  # 더미 키로 실행 방지
     else:
         # 로컬에서는 종료
         print("ERROR: Set OPENROUTER_API_KEY in environment")
