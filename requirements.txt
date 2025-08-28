@@ -1,3 +1,4 @@
+# 파일 열어서 수정
 Flask==3.0.0
 Flask-CORS==4.0.0
 Flask-Limiter==3.5.0
@@ -6,3 +7,4 @@ openai==1.12.0
 bleach==6.1.0
 redis==5.0.0
 httpx==0.25.0
+gunicorn==21.2.0
