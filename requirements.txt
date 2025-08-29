@@ -8,3 +8,4 @@ bleach==6.1.0
 redis==5.0.0
 httpx==0.25.0
 gunicorn==21.2.0
+requests==2.31.0
