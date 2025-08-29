@@ -62,7 +62,7 @@ MAX_OUTPUT_TOKENS = 900  # 800 → 900
 
 # 개발 환경 설정
 ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
-MASTER_FINGERPRINTS = ["DEV_FINGERPRINT"]
+MASTER_FINGERPRINTS = ["DEV_FINGERPRINT", "test999"]
 
 # ===== 2025년 현재 정보 (정확한 수치) =====
 CURRENT_INFO = """
