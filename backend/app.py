@@ -35,7 +35,7 @@ app.config.update(
 )
 
 CORS(app, 
-     origins=['https://sudanghelp.co.kr', 'http://localhost:3000'],
+     origins=['*'],  # 모든 도메인 허용
      supports_credentials=True)
 
 # Rate Limiting 설정
