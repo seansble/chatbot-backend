@@ -4,7 +4,7 @@ from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.middleware.proxy_fix import ProxyFix
-from openai import OpenAI
+import requests  # OpenAI 대신 requests 사용
 import re
 import logging
 import logging.config
@@ -45,23 +45,13 @@ def get_real_ip():
 limiter = Limiter(
     app=app,
     key_func=get_real_ip,
-    default_limits=["100 per hour"],  # 1000 → 100으로 줄이기
+    default_limits=["100 per hour"],
     storage_uri="memory://"
 )
 
 # 로깅 설정
 logging.config.dictConfig(config.LOGGING_CONFIG)
 logger = logging.getLogger(__name__)
-
-# OpenRouter 클라이언트 초기화 (헤더 추가)
-client = OpenAI(
-    base_url=config.API_BASE_URL,
-    api_key=config.OPENROUTER_API_KEY,
-    default_headers={
-        "HTTP-Referer": "https://sudanghelp.co.kr",
-        "X-Title": "Sudanghelp Unemployment Chat"
-    }
-)
 
 # 메모리 기반 추적
 calculator_users = {}  
@@ -101,7 +91,7 @@ def load_knowledge():
 FAQS = load_knowledge()
 
 def retrieve_faq(query, max_faqs=2, max_tokens=150):
-    """관련 FAQ 검색 (토큰 제한 증가)"""
+    """관련 FAQ 검색"""
     if not FAQS:
         return []
     
@@ -112,10 +102,8 @@ def retrieve_faq(query, max_faqs=2, max_tokens=150):
     
     scores = []
     for faq in FAQS:
-        # 토큰 오버랩
         overlap = len(q_tokens & faq['_tokens'])
         
-        # 키워드 보너스 (확장)
         bonus = 0
         keywords = ['권고사직', '자진퇴사', '임금체불', '계약만료', '재수급',
                    '반복수급', '4회', '5회', '구직활동', '65세', '66세',
@@ -130,22 +118,19 @@ def retrieve_faq(query, max_faqs=2, max_tokens=150):
     
     scores.sort(key=lambda x: x[0], reverse=True)
     
-    # 임계값 체크
     if not scores or scores[0][0] < config.FAQ_CONFIG['min_threshold']:
         return []
     
-    # 토큰 제한으로 선택
     results = []
     used_tokens = 0
     
     for i, (score, faq) in enumerate(scores[:max_faqs]):
-        # 첫 번째 FAQ는 더 상세히, 두 번째는 짧게
         if i == 0:
             faq_text = faq.get('a', faq.get('a_short', ''))[:120]
         else:
             faq_text = faq.get('a_short', faq['a'][:80])
         
-        faq_tokens = len(faq_text) // 3  # 한글 3자 = 1토큰 추정
+        faq_tokens = len(faq_text) // 3
         
         if used_tokens + faq_tokens > max_tokens:
             break
@@ -159,7 +144,7 @@ def retrieve_faq(query, max_faqs=2, max_tokens=150):
     
     return results
 
-# 금액 계산 의도 감지 (정규식 기반)
+# 금액 계산 의도 감지
 RX_NUM = r"(?:\d{1,3}(?:,\d{3})+|\d+)"
 ASK_AMT = re.compile(r"(얼마|금액|일액|일당|월급|상한|하한|수당|총액|받(?:나요|아|을까요)|나오(?:나요|니|게))")
 HAS_NUMW = re.compile(fr"{RX_NUM}\s*(원|만원)")
@@ -174,7 +159,6 @@ def detect_amount_intent(q: str) -> str:
     hits += 1 if HAS_NUMW.search(t) else 0
     hits += 1 if VERB_CALC.search(t) else 0
     
-    # 정보성 질문은 제외
     if INFO_ONLY.search(t) and hits == 1:
         return None
     
@@ -321,7 +305,7 @@ def validate_answer(answer, question):
         if "총 4번" in answer or "4차까지 4번" in answer:
             return config.FALLBACK_ANSWERS["구직활동_횟수"]
     
-    # 하한액 오류 체크 (2025년 정확한 수치)
+    # 하한액 오류 체크
     if "63,816원" in answer:
         answer = answer.replace("63,816원", "64,192원")
     if "68,640원" in answer:
@@ -333,7 +317,7 @@ def validate_answer(answer, question):
     
     # 비현실적 금액 차단
     MAX_DAILY = 66000
-    MAX_TOTAL = MAX_DAILY * 270  # 17,820,000원
+    MAX_TOTAL = MAX_DAILY * 270
     
     if re.search(fr"{RX_NUM}\s*만\s*원", answer):
         nums = [int(x.replace(",","")) for x in re.findall(RX_NUM, answer)]
@@ -343,24 +327,23 @@ def validate_answer(answer, question):
     return answer
 
 def generate_ai_answer(question, calc_data=None):
-    """AI 답변 생성 (2025년 개선 버전)"""
+    """AI 답변 생성 - requests 사용"""
     try:
         # 금액 계산 의도 차단
         if detect_amount_intent(question) == "AMOUNT_CALC":
             return config.FALLBACK_ANSWERS["금액_계산_금지"]
         
-        # 180일 미만 근무 체크 (최우선 처리)
+        # 180일 미만 근무 체크
         month_match = re.search(r'(\d+)\s*개월', question)
         if month_match:
             months = int(month_match.group(1))
             if months < 6:
                 return "고용보험 가입기간이 180일(6개월) 이상이어야 실업급여 수급이 가능합니다. 6개월 미만 근무시에는 수급 자격이 없습니다.\n\n자세한 상담: 고용노동부 1350"
         
-        # 1. 특정 케이스는 바로 fallback
+        # 특정 케이스는 바로 fallback
         if ("권고사직" in question and "사직서" in question):
             return config.FALLBACK_ANSWERS["권고사직_사직서"]
         
-        # "자진퇴사 후" 맥락은 제외
         if ("자진퇴사" in question and "후" not in question and "회사" not in question) and "임금체불" not in question:
             return config.FALLBACK_ANSWERS["자진퇴사"]
         
@@ -379,10 +362,10 @@ def generate_ai_answer(question, calc_data=None):
         if "부정수급" in question:
             return config.FALLBACK_ANSWERS["부정수급"]
         
-        # 2. FAQ 검색
+        # FAQ 검색
         faqs = retrieve_faq(question)
         
-        # 3. 시스템/유저 메시지 구성
+        # 시스템/유저 메시지 구성
         system_prompt = config.SYSTEM_PROMPT.format(
             current_info=config.CURRENT_INFO
         )
@@ -405,7 +388,7 @@ def generate_ai_answer(question, calc_data=None):
             case_text += "\n위는 일반 원칙입니다. 사용자의 구체적 상황(근무기간, 임금, 퇴사사유)을 180일, 상한/하한액 규칙에 직접 대입하여 답변하세요."
             user_msg += case_text
 
-        # 컨텍스트 명확화 (쿠팡플렉스, 배달 등)
+        # 컨텍스트 명확화
         if ("하는데" in question or "인데" in question) and "실업급여" in question:
             if "받으면서" not in question and "수급" not in question:
                 user_msg += "\n\n⚠️ 중요: 질문자는 현재 해당 일을 하고 있으며, 퇴직 후 실업급여 자격을 묻는 것입니다. 수급 중 부업이 아닙니다!"
@@ -418,44 +401,67 @@ def generate_ai_answer(question, calc_data=None):
         if "65세" in question or "66세" in question:
             user_msg += "\n\n중요: 65세 이전부터 계속 근무한 경우만 가능. 65세 이후 신규 고용은 제외."
 
-        # 여러 회사 언급시 마지막 이직사유 강조
         if ("회사" in question and "후" in question) or ("퇴사" in question and "다시" in question):
             user_msg += "\n\n중요: 실업급여는 마지막 직장의 이직사유만 판단합니다. 이전 직장은 180일 계산에만 사용."
 
-        # 알바/근로 언급시 부정수급 경고
         if "알바" in question or "일하면서" in question:
-            user_msg += "\n\n중요: 실업급여 수급 중 근로는 반드시 신고. 미신고시 5배 추징."        
+            user_msg += "\n\n중요: 실업급여 수급 중 근로는 반드시 신고. 미신고시 5배 추징."
         
         if "다시" in question or "현재" in question or "지금" in question:
             if any(word in question for word in ["일하고", "근무하고", "활동하고", "라이더로"]):
                 user_msg += "\n\n⚠️ 매우 중요: 이미 새로운 일을 시작했다면 실업 상태가 아니므로 실업급여 신청 자체가 불가능합니다!"
-            
-        # 4. API 호출
-        response = client.chat.completions.create(
-            model=config.MODEL_NAME,
-            messages=[
+        
+        # requests로 OpenRouter API 직접 호출
+        headers = {
+            "Authorization": f"Bearer {config.OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://sudanghelp.co.kr",
+            "X-Title": "Sudanghelp Unemployment Chat"
+        }
+        
+        data = {
+            "model": config.MODEL_NAME,
+            "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_msg}
             ],
-            temperature=0.2,
-            max_tokens=config.MAX_OUTPUT_TOKENS
+            "temperature": 0.2,
+            "max_tokens": config.MAX_OUTPUT_TOKENS
+        }
+        
+        response = requests.post(
+            f"{config.API_BASE_URL}/chat/completions",
+            headers=headers,
+            json=data,
+            timeout=30
         )
         
-        answer = response.choices[0].message.content
+        if response.status_code == 200:
+            result = response.json()
+            answer = result['choices'][0]['message']['content']
+        else:
+            logger.error(f"API Response Error: {response.status_code} - {response.text[:200]}")
+            return "일시적 오류가 발생했습니다. 고용노동부 상담센터 1350으로 문의하세요."
         
-        # 5. 답변 검증
+        # 답변 검증
         answer = validate_answer(answer, question)
         
-        # 6. 계산 관련 질문시 링크 추가 (a태그 형식)
+        # 계산 관련 질문시 링크 추가
         if any(word in question for word in ['얼마', '금액', '계산', '월급', '하한', '상한']):
             if "sudanghelp.co.kr" not in answer:
                 answer += '\n\n<a href="https://sudanghelp.co.kr/unemployment/" target="_blank" style="background:#0066ff;color:white;padding:8px 16px;border-radius:4px;text-decoration:none;display:inline-block;margin:10px 0">📊 실업급여 계산기 바로가기</a>'
         
-        # 7. 후처리
+        # 후처리
         answer = postprocess_answer(answer)
         
         return answer
         
+    except requests.exceptions.ConnectionError as e:
+        logger.error(f"Connection error: {e}")
+        return "일시적 오류가 발생했습니다. 고용노동부 상담센터 1350으로 문의하세요."
+    except requests.exceptions.Timeout as e:
+        logger.error(f"Timeout error: {e}")
+        return "응답 시간이 초과되었습니다. 잠시 후 다시 시도해주세요."
     except Exception as e:
         logger.error(f"API error: {e}")
         
@@ -470,19 +476,17 @@ def generate_ai_answer(question, calc_data=None):
         return "일시적 오류가 발생했습니다. 고용노동부 상담센터 1350으로 문의하세요."
 
 def postprocess_answer(answer):
-    """답변 후처리 (계산기 링크 변환 포함)"""
+    """답변 후처리"""
     # 마크다운 제거
     answer = answer.replace('**', '').replace('###', '').replace('##', '').replace('#', '')
     
     # 계산기 URL을 클릭 가능한 형태로 변환
-    # 패턴 1: "계산기: URL" 형태
     answer = re.sub(
         r'계산기:\s*(https://sudanghelp\.co\.kr/unemployment/?)',
         r'<a href="\1" target="_blank" style="background:#0066ff;color:white;padding:8px 16px;border-radius:4px;text-decoration:none;display:inline-block;margin:10px 0">📊 실업급여 계산기 바로가기</a>',
         answer
     )
     
-    # 패턴 2: 단순 URL (이미 a태그가 아닌 경우만)
     answer = re.sub(
         r'(?<!href=")(?<!>)(https://sudanghelp\.co\.kr/unemployment/?)(?!</a>)',
         r'<a href="\1" target="_blank" style="background:#0066ff;color:white;padding:8px 16px;border-radius:4px;text-decoration:none;display:inline-block;margin:10px 0">📊 실업급여 계산기 바로가기</a>',
@@ -494,7 +498,7 @@ def postprocess_answer(answer):
     
     return answer
 
-# 루트 경로 추가 - Railway 헬스체크용
+# 루트 경로 - Railway 헬스체크용
 @app.route("/", methods=["GET"])
 def index():
     """루트 경로 - Railway 헬스체크용"""
@@ -506,7 +510,8 @@ def index():
             "health": "/health",
             "chat": "/api/chat",
             "feedback": "/api/feedback",
-            "calculator": "/api/mark-calculator-used"
+            "calculator": "/api/mark-calculator-used",
+            "test": "/api/test-openrouter"
         }
     })
 
@@ -519,6 +524,45 @@ def health_check():
         "model": config.MODEL_NAME,
         "version": "2025.08.28"
     })
+
+# OpenRouter 연결 테스트 엔드포인트 추가
+@app.route("/api/test-openrouter", methods=["GET"])
+def test_openrouter():
+    """OpenRouter 연결 테스트"""
+    try:
+        headers = {
+            "Authorization": f"Bearer {config.OPENROUTER_API_KEY}",
+        }
+        
+        # 모델 목록 가져오기
+        response = requests.get(
+            f"{config.API_BASE_URL}/models",
+            headers=headers,
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            return jsonify({
+                "status": "connected",
+                "code": response.status_code,
+                "message": "OpenRouter API connected successfully"
+            })
+        else:
+            return jsonify({
+                "status": "error",
+                "code": response.status_code,
+                "message": response.text[:200]
+            })
+    except requests.exceptions.ConnectionError:
+        return jsonify({
+            "status": "blocked",
+            "message": "Connection blocked or network issue"
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)[:200]
+        })
 
 @app.route("/api/mark-calculator-used", methods=["POST"])
 def mark_calculator_used():
@@ -549,17 +593,14 @@ def feedback():
     """좋아요/싫어요 피드백 처리"""
     try:
         data = request.json
-        feedback_type = data.get("type")  # "like" or "dislike"
+        feedback_type = data.get("type")
         answer_hash = hashlib.md5(data.get('answer', '').encode()).hexdigest()[:16]
         
-        # 싫어요인 경우 패턴 분석용 로그
         if feedback_type == "dislike":
             logger.warning(f"Dislike feedback: {data.get('question')[:100]}")
         
-        # 카운트 증가
         feedback_counts[answer_hash][feedback_type] += 1
         
-        # CSV 저장
         feedback_file = 'qa_logs/feedback.csv'
         file_exists = os.path.exists(feedback_file)
         
@@ -576,7 +617,6 @@ def feedback():
                 data.get('answer', '')[:200]
             ])
         
-        # 현재 카운트 반환
         return jsonify({
             "status": "ok",
             "counts": {
@@ -598,7 +638,7 @@ def get_feedback_count(answer_hash):
 
 @app.route("/api/reload-faq", methods=["POST"])
 def reload_faq():
-    """FAQ 리로드 (선택사항)"""
+    """FAQ 리로드"""
     global FAQS
     FAQS = load_knowledge()
     return jsonify({"status": "reloaded", "count": len(FAQS)})
@@ -615,7 +655,7 @@ def chat():
         # 개발자 체크
         is_dev = fingerprint in config.MASTER_FINGERPRINTS or config.ENVIRONMENT == "development"
         
-        # User-Agent 체크 (봇 방지)
+        # User-Agent 체크
         user_agent = request.headers.get('User-Agent', '')
         if not user_agent or 'bot' in user_agent.lower():
             return jsonify({"error": "접근이 차단되었습니다"}), 403
@@ -624,7 +664,7 @@ def chat():
         if not question:
             return jsonify({"error": "질문이 없습니다"}), 400
         
-        # HTML 태그 제거 (XSS 방지)
+        # HTML 태그 제거
         question = bleach.clean(question, tags=[], strip=True)
         
         # 입력 길이 체크
@@ -638,19 +678,13 @@ def chat():
         # 실업급여 관련 체크
         if not is_unemployment_related(question):
             return jsonify({
-                "answer": "실업급여 관련 질문만 답변 가능합니다. 문의: 고용노동부 상담센터 1350"
+                "answer": "실업급여 관련 질문만 답변 가능합니다. 문의: 고용노동부 상담센터 1350",
+                "remaining": 999 if is_dev else get_remaining_count(get_user_keys(request, fingerprint))
             })
         
         # 개발자가 아닐 때만 제한 체크
         if not is_dev:
             keys = get_user_keys(request, fingerprint)
-            
-            # 계산기 사용 체크 (선택사항 - 주석처리 가능)
-            # if not check_calculator_usage(keys):
-            #     return jsonify({
-            #         "error": "계산기를 먼저 이용해주세요",
-            #         "redirect": "https://sudanghelp.co.kr/unemployment/"
-            #     })
             
             # 일일 3회 제한
             if not check_all_limits(keys, 3):
@@ -668,7 +702,7 @@ def chat():
         # AI로 답변 생성
         answer = generate_ai_answer(question, calc_data)
         
-        # 답변 해시 생성 (피드백용)
+        # 답변 해시 생성
         answer_hash = hashlib.md5(answer.encode()).hexdigest()[:16]
         
         # Q&A 저장
@@ -691,7 +725,7 @@ def chat():
             "updated": "2025-08-28"
         }))
         
-        # 쿠키 설정 (없는 경우에만)
+        # 쿠키 설정
         if not request.cookies.get('usage_token'):
             new_token = str(uuid.uuid4())
             resp.set_cookie('usage_token', new_token, max_age=86400, httponly=True, samesite='Lax')
