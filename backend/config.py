@@ -53,7 +53,7 @@ if not OPENROUTER_API_KEY:
         
 # API 설정
 API_PROVIDER = "openrouter"
-MODEL_NAME = "qwen/qwen3-235b-a22b-2507"
+MODEL_NAME = "qwen/qwen3-235b-a22b-instruct-2507"
 API_BASE_URL = "https://openrouter.ai/api/v1"
 
 # 토큰 제한 설정 (증가)
