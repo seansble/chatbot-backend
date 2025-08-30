@@ -12,7 +12,7 @@ for key in sorted(os.environ.keys()):
         print(f"{key}: [HIDDEN]")  # 값을 완전히 숨김
 
 # API Key 가져오기 (환경변수에서)
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 
 # 가능한 모든 변수명 시도
 possible_keys = [
@@ -23,7 +23,7 @@ possible_keys = [
 ]
 
 for key in possible_keys:
-    value = os.getenv(key)
+    value = os.getenv(key, "").strip()
     if value:
         OPENROUTER_API_KEY = value
         print(f"Found API key in: {key}")
@@ -33,7 +33,7 @@ for key in possible_keys:
 if not OPENROUTER_API_KEY:
     for key, value in os.environ.items():
         if 'OPENROUTER' in key.upper():
-            OPENROUTER_API_KEY = value
+            OPENROUTER_API_KEY = value.strip()
             print(f"Found API key in environ: {key}")
             break
         
