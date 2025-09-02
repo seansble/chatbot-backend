@@ -4,7 +4,7 @@ from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.middleware.proxy_fix import ProxyFix
-from openai import OpenAI  # OpenAI SDK 추가
+from openai import OpenAI
 import requests
 import re
 import logging
@@ -99,69 +99,83 @@ def load_knowledge():
 FAQS = load_knowledge()
 
 
-def retrieve_faq(query, max_faqs=2, max_tokens=150):
-    """관련 FAQ 검색"""
+def calculate_faq_relevance(query, faq):
+    """FAQ와 질문의 관련성 점수 계산"""
+    query_lower = query.lower()
+    faq_q_lower = faq["q"].lower()
+    faq_a_lower = faq.get("a_short", faq["a"]).lower()
+    
+    score = 0.0
+    
+    # 질문 유사도
+    q_tokens = tokenize(query)
+    faq_tokens = faq["_tokens"]
+    overlap = len(q_tokens & faq_tokens)
+    
+    if len(q_tokens) > 0:
+        score = overlap / len(q_tokens)
+    
+    # 카테고리별 보정
+    if "자진퇴사" in query_lower:
+        if faq["category"] == "자진퇴사":
+            # 예외사유가 있으면 점수 증가
+            if any(exc in query_lower for exc in ["임금체불", "괴롭힘", "통근", "질병"]):
+                score += 0.5
+            # 계약 관련이면 점수 감소
+            elif "계약" in query_lower:
+                score -= 0.3
+        elif faq["category"] == "계약만료" and "계약" in query_lower:
+            score += 0.4
+    
+    if "계약" in query_lower and faq["category"] == "계약만료":
+        score += 0.3
+    
+    if "반복수급" in query_lower and faq["category"] == "반복수급":
+        score += 0.4
+    
+    # 년도와 개월이 함께 있으면 180일 계산 FAQ 점수 감소
+    if "년" in query_lower and "개월" in query_lower and faq["id"] == "K-001":
+        score -= 0.5
+    
+    return max(0, score)
+
+
+def retrieve_faq(query, max_faqs=2):
+    """관련 FAQ 검색 - 개선된 버전"""
     if not FAQS:
         return []
-
-    q_tokens = tokenize(query)
-
-    if len(q_tokens) < 2:
-        return []
-
-    scores = []
+    
+    # 각 FAQ의 관련성 점수 계산
+    scored_faqs = []
     for faq in FAQS:
-        overlap = len(q_tokens & faq["_tokens"])
-
-        bonus = 0
-        keywords = [
-            "권고사직",
-            "자진퇴사",
-            "임금체불",
-            "계약만료",
-            "재수급",
-            "반복수급",
-            "4회",
-            "5회",
-            "구직활동",
-            "65세",
-            "66세",
-            "자영업",
-            "폐업",
-            "조기재취업",
-        ]
-        for kw in keywords:
-            if kw in query and kw in faq["q"]:
-                bonus += 2
-
-        score = overlap + bonus
+        score = calculate_faq_relevance(query, faq)
         if score > 0:
-            scores.append((score, faq))
-
-    scores.sort(key=lambda x: x[0], reverse=True)
-
-    if not scores or scores[0][0] < config.FAQ_CONFIG["min_threshold"]:
-        return []
-
+            scored_faqs.append((score, faq))
+    
+    # 점수순 정렬
+    scored_faqs.sort(key=lambda x: x[0], reverse=True)
+    
+    # 임계값 이상만 선택
     results = []
-    used_tokens = 0
-
-    for i, (score, faq) in enumerate(scores[:max_faqs]):
-        if i == 0:
-            faq_text = faq.get("a", faq.get("a_short", ""))[:120]
-        else:
-            faq_text = faq.get("a_short", faq["a"][:80])
-
-        faq_tokens = len(faq_text) // 3
-
-        if used_tokens + faq_tokens > max_tokens:
+    seen_categories = set()
+    
+    for score, faq in scored_faqs:
+        if score < config.FAQ_CONFIG["min_threshold"]:
             break
-
-        results.append(
-            {"q": faq["q"][:30], "a": faq_text, "category": faq.get("category", "")}
-        )
-        used_tokens += faq_tokens
-
+        
+        # 카테고리 다양성 보장
+        if faq["category"] not in seen_categories:
+            results.append({
+                "q": faq["q"][:50],
+                "a": faq.get("a_short", faq["a"])[:120],
+                "category": faq["category"],
+                "score": score
+            })
+            seen_categories.add(faq["category"])
+            
+            if len(results) >= max_faqs:
+                break
+    
     return results
 
 
@@ -194,7 +208,7 @@ def detect_amount_intent(q: str) -> str:
     return "AMOUNT_CALC" if hits >= 2 or VERB_CALC.search(t) else None
 
 
-# 기존 함수들
+# 기존 함수들 (변경 없음)
 def get_user_keys(request, fingerprint):
     client_ip = (
         request.headers.get("X-Forwarded-For", request.remote_addr)
@@ -355,27 +369,55 @@ def save_qa_with_user(question, answer, user_key):
         )
 
 
+def should_use_premise(question):
+    """'실업급여 조건이 충족된다는 전제 하에' 사용 여부 판단"""
+    question_lower = question.lower()
+    
+    # 사용하지 않는 경우들
+    dont_use = [
+        # 이미 재취업/근무 중
+        "일하고", "근무하고", "활동하고", "라이더로", "배달하는", "프리랜서로",
+        "다니고", "취직", "재취업", "시작했", "시작한",
+        # 제도 설명 질문
+        "뭐야", "뭐에요", "무엇", "얼마나", "기준", "상한", "하한",
+        # 자격 없음이 명확한 경우
+        "3개월", "4개월", "5개월"  # 6개월 미만
+    ]
+    
+    # 사용하는 경우들
+    do_use = [
+        # 일반적 설명이 필요한 경우
+        "권고사직", "계약만료", "해고",
+        # 가정적 질문
+        "받을 수 있", "가능한가", "되나요",
+        # 과거형 (이미 퇴직)
+        "퇴사했", "그만뒀", "퇴직했"
+    ]
+    
+    # 사용하지 않는 패턴이 있으면 False
+    if any(pattern in question_lower for pattern in dont_use):
+        return False
+    
+    # 사용하는 패턴이 있으면 True
+    if any(pattern in question_lower for pattern in do_use):
+        return True
+    
+    # 기본값: 사용하지 않음
+    return False
+
+
 def validate_answer(answer, question):
     """답변 검증 및 교정"""
     # 반복수급 관련 오류 체크
     if "반복수급" in question or "네 번째" in question or "4회" in question:
         if "30%" in answer or "3회 이상" in answer:
-            return config.FALLBACK_ANSWERS["반복수급_감액"]
-
-    # 구직활동 횟수 오류 체크
-    if "구직활동" in question and ("4차" in question or "횟수" in question):
-        if "총 4번" in answer or "4차까지 4번" in answer:
-            return config.FALLBACK_ANSWERS["구직활동_횟수"]
+            return config.FALLBACK_ANSWERS.get("반복수급_감액", answer)
 
     # 하한액 오류 체크
     if "63,816원" in answer:
         answer = answer.replace("63,816원", "64,192원")
     if "68,640원" in answer:
         answer = answer.replace("68,640원", "66,000원")
-
-    # 조기재취업수당 오류 체크
-    if "조기재취업" in question and ("50%" in answer or "1/2" in answer):
-        return config.FALLBACK_ANSWERS["조기재취업수당"]
 
     # 비현실적 금액 차단
     MAX_DAILY = 66000
@@ -390,51 +432,36 @@ def validate_answer(answer, question):
 
 
 def generate_ai_answer(question, calc_data=None):
-    """AI 답변 생성 - OpenAI SDK 사용"""
+    """AI 답변 생성 - 개선된 버전"""
     try:
         # 금액 계산 의도 차단
         if detect_amount_intent(question) == "AMOUNT_CALC":
             return config.FALLBACK_ANSWERS["금액_계산_금지"]
 
-        # 180일 미만 근무 체크
-        month_match = re.search(r"(\d+)\s*개월", question)
-        if month_match:
-            months = int(month_match.group(1))
-            if months < 6:
-                return "고용보험 가입기간이 180일(6개월) 이상이어야 실업급여 수급이 가능합니다. 6개월 미만 근무시에는 수급 자격이 없습니다.\n\n자세한 상담: 고용노동부 1350"
+        # 6개월 미만 체크 - 개선
+        if "년" not in question:  # "8년 3개월" 같은 경우 제외
+            month_match = re.search(r"(\d+)\s*개월", question)
+            if month_match:
+                months = int(month_match.group(1))
+                if months < 6:
+                    return """고용보험 가입기간이 180일(6개월) 이상이어야 실업급여 수급이 가능합니다. 
+6개월 미만 근무시에는 수급 자격이 없습니다.
 
-        # 특정 케이스는 바로 fallback
-        if "권고사직" in question and "사직서" in question:
-            return config.FALLBACK_ANSWERS["권고사직_사직서"]
+자세한 상담: 고용노동부 1350"""
 
-        if (
-            "자진퇴사" in question and "후" not in question and "회사" not in question
-        ) and "임금체불" not in question:
-            return config.FALLBACK_ANSWERS["자진퇴사"]
-
-        if "반복수급" in question and ("감액" in question or "깎" in question):
-            return config.FALLBACK_ANSWERS["반복수급_감액"]
-
-        if "구직활동" in question and ("몇 번" in question or "횟수" in question):
-            return config.FALLBACK_ANSWERS["구직활동_횟수"]
-
-        if "자영업" in question and ("폐업" in question or "실업급여" in question):
-            return config.FALLBACK_ANSWERS["자영업자"]
-
-        if "조기재취업" in question and not any(
-            word in question for word in ["얼마", "깎", "계산", "반복", "4번"]
-        ):
-            return config.FALLBACK_ANSWERS["조기재취업수당"]
-
+        # 부정수급은 항상 경고
         if "부정수급" in question:
             return config.FALLBACK_ANSWERS["부정수급"]
 
-        # FAQ 검색
+        # FAQ 검색 - 개선된 버전 사용
         faqs = retrieve_faq(question)
 
         # 시스템/유저 메시지 구성
         system_prompt = config.SYSTEM_PROMPT.format(current_info=config.CURRENT_INFO)
 
+        # "실업급여 조건이 충족된다는 전제" 사용 여부 결정
+        use_premise = should_use_premise(question)
+        
         user_msg = f"질문: {question}"
 
         # 계산기 데이터 활용
@@ -447,11 +474,17 @@ def generate_ai_answer(question, calc_data=None):
 
         # FAQ 있으면 참고사례로 추가
         if faqs:
-            case_text = "\n\n[참고 지식]\n"
+            case_text = "\n\n[참고 FAQ - 맥락에 맞을 때만 사용하세요]\n"
             for faq in faqs:
-                case_text += f"- {faq['q']}: {faq['a']}\n"
-            case_text += "\n위는 일반 원칙입니다. 사용자의 구체적 상황(근무기간, 임금, 퇴사사유)을 180일, 상한/하한액 규칙에 직접 대입하여 답변하세요."
+                case_text += f"- Q: {faq['q']}\n  A: {faq['a']}\n"
+            case_text += "\n이 FAQ는 참고용입니다. 질문의 상황과 정확히 맞을 때만 활용하고, 맞지 않으면 무시하세요."
             user_msg += case_text
+
+        # 전제 사용 지침 추가
+        if use_premise:
+            user_msg += '\n\n지침: 이 질문은 일반적인 설명이 필요하므로 "실업급여 조건이 충족된다는 전제 하에"로 시작하세요.'
+        else:
+            user_msg += '\n\n지침: 이 질문은 구체적 상황이므로 "실업급여 조건이 충족된다는 전제 하에"를 사용하지 마세요.'
 
         # 컨텍스트 명확화
         if ("하는데" in question or "인데" in question) and "실업급여" in question:
@@ -483,17 +516,16 @@ def generate_ai_answer(question, calc_data=None):
             ):
                 user_msg += "\n\n⚠️ 매우 중요: 이미 새로운 일을 시작했다면 실업 상태가 아니므로 실업급여 신청 자체가 불가능합니다!"
 
-        # OpenRouter 예제대로 OpenAI 클라이언트 사용
+        # OpenAI 클라이언트 사용
         logger.info(f"Using Together AI with model: {config.MODEL_NAME}")
 
         client = OpenAI(
-            base_url="https://api.together.xyz/v1",  # Together AI URL로 변경
-            api_key=config.OPENROUTER_API_KEY,  # config에서 TOGETHER_API_KEY로 연결됨
+            base_url="https://api.together.xyz/v1",
+            api_key=config.OPENROUTER_API_KEY,
         )
 
-        # Together AI 호출 (extra_headers 제거)
         completion = client.chat.completions.create(
-            model=config.MODEL_NAME,  # config에서 가져옴
+            model=config.MODEL_NAME,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_msg},
@@ -504,7 +536,7 @@ def generate_ai_answer(question, calc_data=None):
 
         # 응답 처리
         answer = completion.choices[0].message.content
-        logger.info("OpenAI SDK call successful")
+        logger.info("AI call successful")
 
         # 답변 검증
         answer = validate_answer(answer, question)
@@ -523,19 +555,11 @@ def generate_ai_answer(question, calc_data=None):
         return answer
 
     except Exception as e:
-        logger.error(f"OpenAI SDK error: {str(e)}")
+        logger.error(f"AI error: {str(e)}")
 
-        # API 실패시 fallback
-        if "권고사직" in question:
-            return config.FALLBACK_ANSWERS.get(
-                "권고사직_사직서", "고용노동부 상담센터 1350으로 문의하세요."
-            )
-        elif any(word in question for word in ["얼마", "금액", "계산"]):
+        # API 실패시 최소한의 fallback
+        if any(word in question for word in ["얼마", "금액", "계산"]):
             return config.CALCULATION_GUIDE
-        elif "자진퇴사" in question or "자발적" in question:
-            return config.FALLBACK_ANSWERS.get(
-                "자진퇴사", "고용노동부 상담센터 1350으로 문의하세요."
-            )
 
         return "일시적 오류가 발생했습니다. 고용노동부 상담센터 1350으로 문의하세요."
 
@@ -649,7 +673,7 @@ def test_openrouter():
                 {
                     "status": "connected",
                     "code": response.status_code,
-                    "message": "OpenRouter API connected successfully",
+                    "message": "API connected successfully",
                 }
             )
         else:

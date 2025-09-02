@@ -20,18 +20,14 @@ def clean_key(s):
 
 # Together AI로 변경
 raw_key = os.getenv("TOGETHER_API_KEY", "")
-print(f"DEBUG: Raw key from env: '{raw_key[:10] if raw_key else 'EMPTY'}'...")
-print(f"DEBUG: Key exists: {bool(raw_key)}")
-
 TOGETHER_API_KEY = clean_key(raw_key)
-print(f"DEBUG: Cleaned key length: {len(TOGETHER_API_KEY)}")
 
-# 임시로 검증 완화 (sys.exit 제거)
-if not TOGETHER_API_KEY:
-    print(f"WARNING: No TOGETHER API key found, using dummy")
-    TOGETHER_API_KEY = "dummy-key-for-testing"  # 일단 시작하도록
-else:
-    print(f"Together AI Key loaded: {TOGETHER_API_KEY[:10]}...")
+# 키 검증
+if not TOGETHER_API_KEY or len(TOGETHER_API_KEY) < 20:
+    print(f"WARNING: Invalid TOGETHER API key, using dummy")
+    TOGETHER_API_KEY = "dummy-key-for-testing"
+
+print(f"Together AI Key loaded successfully")
 
 # API 설정
 API_BASE_URL = "https://api.together.xyz/v1"
@@ -66,76 +62,16 @@ CALCULATION_GUIDE = """실업급여 계산은 개인별 상황에 따라 달라�
 - 연령  
 - 고용보험 가입기간"""
 
-# 중요 케이스 하드코딩
+# 중요 케이스 하드코딩 - 최소화
 FALLBACK_ANSWERS = {
-    "권고사직_사직서": """네, 사직서를 작성했어도 권고사직으로 인정받을 수 있습니다.
-
-준비하실 서류:
-- 권고받은 증거 (녹음, 문자, 이메일 등)
-- 동료 증언서
-- 퇴사 경위서 (자필)
-
-고용센터에서 이직사유 심사를 신청하시면 됩니다. 
-실제 승인률은 약 70% 정도이니 증거자료를 잘 준비하세요.
-
-<a href="https://sudanghelp.co.kr/unemployment/" target="_blank" style="background:#0066ff;color:white;padding:8px 16px;border-radius:4px;text-decoration:none;display:inline-block;margin:10px 0">📊 실업급여 계산기 바로가기</a>
-
-문의: 고용노동부 상담센터 1350""",
-    "자진퇴사": """자진퇴사는 원칙적으로 실업급여를 받을 수 없습니다.
-
-예외적으로 인정되는 경우:
-- 임금체불 2개월 이상 (체불확인서 필요)
-- 최저임금 미달 (급여명세서 필요)
-- 직장내 괴롭힘/성희롱 (증빙 필수)
-- 통근 왕복 3시간 이상 (주소지 증명)
-- 질병/부상 (4주 이상 진단서)
-
-각 사유별로 증빙서류가 꼭 필요합니다.
-
-<a href="https://sudanghelp.co.kr/unemployment/" target="_blank" style="background:#0066ff;color:white;padding:8px 16px;border-radius:4px;text-decoration:none;display:inline-block;margin:10px 0">📊 실업급여 계산기 바로가기</a>
-
-자세한 상담: 고용노동부 상담센터 1350""",
-    "반복수급_감액": """2025년 반복수급자 감액 기준:
-- 3회째: 10% 감액
-- 4회째: 25% 감액  
-- 5회째: 40% 감액
-- 6회째 이상: 50% 감액
-※ 대기기간 연장 가능
-※ 2025년 이전 수급 이력은 제외
-※ 일용직, 정당한 이직 사유는 횟수에서 제외
-
-<a href="https://sudanghelp.co.kr/unemployment/" target="_blank" style="background:#0066ff;color:white;padding:8px 16px;border-radius:4px;text-decoration:none;display:inline-block;margin:10px 0">📊 실업급여 계산기 바로가기</a>""",
-    "구직활동_횟수": """구직활동 요건:
-- 1차~4차: 각 1회
-- 5차부터: 각 2회 (최소 1회는 실제 구직활동)
-
-인정되는 활동:
-- 입사지원, 면접, 직업훈련, 자격증 취득
-- 같은 날 여러 활동해도 1개만 인정
-- 2025년부터 온라인 실업인정 원칙
-
-워크넷 이용시 자동으로 인정되니 가장 편리합니다.""",
-    "자영업자": """자영업자도 고용보험 가입시 실업급여 가능합니다.
-
-요건: 폐업 전 24개월 내 피보험기간 1년 이상
-급여일수: 120~210일 (일반 근로자와 다름)
-필요서류: 폐업 증명서류, 매출 감소 증빙
-
-<a href="https://sudanghelp.co.kr/unemployment/" target="_blank" style="background:#0066ff;color:white;padding:8px 16px;border-radius:4px;text-decoration:none;display:inline-block;margin:10px 0">📊 실업급여 계산기 바로가기</a>""",
-    "조기재취업수당": """조기재취업수당 (2025년 개선):
-- 지급액: 잔여 급여일수의 2/3 (67%)
-- 조건: 대기기간 7일 + 수급기간 1/2 이전 재취업
-- 12개월 이상 고용 유지 필수
-
-<a href="https://sudanghelp.co.kr/unemployment/" target="_blank" style="background:#0066ff;color:white;padding:8px 16px;border-radius:4px;text-decoration:none;display:inline-block;margin:10px 0">📊 실업급여 계산기 바로가기</a>""",
     "부정수급": """부정수급 처벌 (2025년 강화):
 - 적발시 받은 금액의 5배 추징 (기존 3배)
 - 형사처벌 + 명단 공개
 - 향후 3년간 실업급여 제한
 
 허위 구직활동, 취업 사실 은닉 등 모두 해당됩니다.""",
-    "금액_계산_금지": """실업급여 조건이 충족된다는 전제 하에,
-정확한 금액 계산은 복잡한 요소가 많습니다:
+    
+    "금액_계산_금지": """정확한 금액 계산은 복잡한 요소가 많습니다:
 
 필요한 정보:
 - 퇴직 전 3개월 평균임금
@@ -148,18 +84,25 @@ FALLBACK_ANSWERS = {
 <a href="https://sudanghelp.co.kr/unemployment/" target="_blank" style="background:#0066ff;color:white;padding:8px 16px;border-radius:4px;text-decoration:none;display:inline-block;margin:10px 0">📊 실업급여 계산기 바로가기</a>""",
 }
 
-# AI 시스템 프롬프트
+# AI 시스템 프롬프트 - 개선
 SYSTEM_PROMPT = """당신은 한국 실업급여 전문 상담사입니다.
 
-[절대 규칙 - 2025년 8월 정답]
+[핵심 원칙]
+1. FAQ는 참고자료일 뿐입니다. 질문의 맥락에 맞을 때만 활용하고, 맞지 않으면 무시하세요.
+2. "실업급여 조건이 충족된다는 전제 하에"는 다음 경우에만 사용:
+   - 질문자가 구체적 조건을 제시하지 않았을 때
+   - 일반적인 규정을 설명할 때
+   - 이미 퇴직했고 수급 가능성이 있을 때
+3. 이미 재취업했거나 근무 중이면 "실업급여 조건이 충족된다는 전제"를 사용하지 마세요.
+
+[2025년 8월 정답]
 - 반복수급 감액: 3회 10%, 4회 25%, 5회 40%, 6회 50%
 - 구직활동: 1-4차 각 1회, 5차부터 각 2회
 - 65세 규칙: 65세 이전부터 계속 근무만 가능
 - 임금체불: 2개월 이상만 인정
 - 조기재취업수당: 잔여일수의 2/3 (67%)
 - 부정수급: 5배 추징 + 명단 공개
-- 이직사유 판단: 마지막 직장의 이직사유만 중요
-- 근무기간 ≠ 수급일수 (절대 다름!)
+- 일 하한액: 64,192원, 상한액: 66,000원
 
 [컨텍스트 해석 필수 규칙]
 1. "~하는데/~인데 실업급여 되나?" = 현재 그 일을 하다가 퇴직 후 자격 문의
@@ -188,7 +131,8 @@ SYSTEM_PROMPT = """당신은 한국 실업급여 전문 상담사입니다.
 
 답변 시작 규칙:
 1. 제도/규정 설명 (뭐야, 기준, 상한액, 하한액만): 바로 답변
-2. 그 외 모든 경우: "실업급여 조건이 충족된다는 전제 하에," 시작
+2. 개인 상황 질문: 상황에 맞춰 답변 (전제 문구 상황별 사용)
+3. 이미 재취업/근무 중: "실업 상태가 아니므로 신청 불가"
 
 금액 계산 절대 금지:
 - 구체적 금액 계산 시도 금지
@@ -205,7 +149,7 @@ SYSTEM_PROMPT = """당신은 한국 실업급여 전문 상담사입니다.
 - 한국어로 2-4문단, 500자 이내"""
 
 # FAQ 설정
-FAQ_CONFIG = {"min_threshold": 2.5, "max_faqs": 2, "max_tokens": 150}
+FAQ_CONFIG = {"min_threshold": 0.5, "max_faqs": 2, "max_tokens": 150}
 
 # 실업급여 키워드
 UNEMPLOYMENT_KEYWORDS = [
