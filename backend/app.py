@@ -336,7 +336,7 @@ def validate_answer(answer, question):
     return answer
 
 def generate_ai_answer(question, calc_data=None):
-    """AI 답변 생성 - 최소 헤더"""
+    """AI 답변 생성 - 헤더 수정"""
     try:
         # 금액 계산 의도 차단
         if detect_amount_intent(question) == "AMOUNT_CALC":
@@ -420,11 +420,19 @@ def generate_ai_answer(question, calc_data=None):
             if any(word in question for word in ["일하고", "근무하고", "활동하고", "라이더로"]):
                 user_msg += "\n\n⚠️ 매우 중요: 이미 새로운 일을 시작했다면 실업 상태가 아니므로 실업급여 신청 자체가 불가능합니다!"
         
-        # 최소 헤더로 API 호출
+        # API 키 정리 및 헤더 구성 - 핵심 수정!
+        api_key = config.OPENROUTER_API_KEY.strip()
+        
+        # 최소 헤더로 단순화 (인증 테스트용)
         headers = {
             "Authorization": f"Bearer {config.OPENROUTER_API_KEY}",
             "Content-Type": "application/json"
         }
+        # HTTP-Referer, X-Title은 인증 성공 후 추가
+        
+        # 디버깅 로그
+        logger.info(f"Using model: {config.MODEL_NAME}")
+        logger.info(f"API key valid: {api_key.startswith('sk-or-v1-')}")
         
         data = {
             "model": config.MODEL_NAME,
@@ -512,7 +520,7 @@ def index():
     return jsonify({
         "service": "Unemployment Benefits Chat API",
         "status": "running",
-        "version": "2025.08.30",
+        "version": "2025.09.02",
         "endpoints": {
             "health": "/health",
             "chat": "/api/chat",
@@ -530,7 +538,7 @@ def health_check():
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "model": config.MODEL_NAME,
-        "version": "2025.08.30",
+        "version": "2025.09.02",
         "openrouter_key_len": len(config.OPENROUTER_API_KEY) if config.OPENROUTER_API_KEY else 0
     })
 
@@ -747,7 +755,7 @@ def chat():
             "answer_hash": answer_hash,
             "sources": [],
             "remaining": remaining,
-            "updated": "2025-08-30"
+            "updated": "2025-09-02"
         }))
         
         # 쿠키 설정

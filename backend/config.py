@@ -1,66 +1,37 @@
 import os
-import re
+import sys
 from dotenv import load_dotenv
 
-# .env 파일 로드
 load_dotenv()
 
 
-def clean_api_key(key):
-    """API 키에서 모든 공백 문자 제거하고 정리"""
-    if not key:
+def clean_key(s):
+    """모든 비가시 문자 제거"""
+    if not s:
         return ""
-
-    # 1. 모든 공백 문자(줄바꿈, 탭, 스페이스 등) 제거
-    key = re.sub(r"\s+", "", key)
-
-    # 2. sk-or-v1-로 시작하는 부분만 추출
-    match = re.search(r"(sk-or-v1-[a-zA-Z0-9]+)", key)
-    if match:
-        return match.group(1)
-
-    # 3. sk-or-v1이 포함되어 있으면 재조합 시도
-    if "sk-or-v1" in key:
-        # sk-or-v1 이후의 모든 알파벳/숫자 추출
-        parts = key.split("sk-or-v1")
-        if len(parts) > 1:
-            # 특수문자 제거하고 알파벳/숫자만 남김
-            clean_suffix = re.sub(r"[^a-zA-Z0-9]", "", parts[1])
-            if clean_suffix:
-                return f"sk-or-v1-{clean_suffix}"
-
-    # 4. 그래도 안되면 원본 반환 (공백은 제거된 상태)
-    return key
+    # BOM, 제로폭 공백, 줄바꿈 모두 제거
+    return (
+        s.replace("\ufeff", "")
+        .replace("\u200b", "")
+        .replace("\n", "")
+        .replace("\r", "")
+        .strip()
+    )
 
 
-# Railway 환경변수에서 API 키 가져오기
-raw_key = os.getenv("OPENROUTER_API_KEY", "")
+# 환경변수에서 키 가져오기
+OPENROUTER_API_KEY = clean_key(os.getenv("OPENROUTER_API_KEY", ""))
 
-# 줄바꿈 문제 해결
-OPENROUTER_API_KEY = clean_api_key(raw_key)
+# 키 검증 - 실패시 앱 종료
+if not OPENROUTER_API_KEY.startswith("sk-or-v1-") or len(OPENROUTER_API_KEY) < 40:
+    print(f"FATAL: Invalid API key (len={len(OPENROUTER_API_KEY)})")
+    print(f"Key prefix: {OPENROUTER_API_KEY[:10] if OPENROUTER_API_KEY else 'EMPTY'}")
+    sys.exit(1)
 
-# 디버깅 출력
-print("=== API KEY DEBUG ===")
-print(f"Raw key length: {len(raw_key)}")
-print(f"Raw key has newline: {chr(10) in raw_key}")
-print(f"Raw key has carriage return: {chr(13) in raw_key}")
-print(f"Raw key repr (first 50): {repr(raw_key[:50]) if raw_key else 'Empty'}")
-print(f"Cleaned key length: {len(OPENROUTER_API_KEY)}")
-print(f"Cleaned key valid: {OPENROUTER_API_KEY.startswith('sk-or-v1-')}")
+print(f"API Key loaded successfully: {OPENROUTER_API_KEY[:15]}...")
 
-# 검증
-if not OPENROUTER_API_KEY:
-    print("ERROR: No API key found after cleaning")
-    # Railway에서도 일단 시작하도록 (디버깅용)
-    OPENROUTER_API_KEY = "dummy-key-for-debugging"
-elif not OPENROUTER_API_KEY.startswith("sk-or-v1-"):
-    print(f"WARNING: Invalid key format after cleaning: {OPENROUTER_API_KEY[:20]}")
-else:
-    print(f"SUCCESS: API Key loaded: {OPENROUTER_API_KEY[:15]}...")
-
-# API 설정 - 모델명 수정!!
-API_PROVIDER = "openrouter"
-MODEL_NAME = "qwen/qwen3-235b-a22b-instruct-2507"  # 정확한 모델명으로 변경!
+# 모델명 단순화 (먼저 auto로 테스트)
+MODEL_NAME = "openrouter/auto"  # 테스트 후 "qwen/qwen3-235b-a22b-instruct-2507"로 변경
 API_BASE_URL = "https://openrouter.ai/api/v1"
 
 # 나머지 설정들
