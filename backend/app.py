@@ -4,6 +4,7 @@ from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.middleware.proxy_fix import ProxyFix
+from openai import OpenAI  # OpenAI SDK 추가
 import requests
 import re
 import logging
@@ -336,7 +337,7 @@ def validate_answer(answer, question):
     return answer
 
 def generate_ai_answer(question, calc_data=None):
-    """AI 답변 생성 - 헤더 수정"""
+    """AI 답변 생성 - OpenAI SDK 사용"""
     try:
         # 금액 계산 의도 차단
         if detect_amount_intent(question) == "AMOUNT_CALC":
@@ -420,43 +421,32 @@ def generate_ai_answer(question, calc_data=None):
             if any(word in question for word in ["일하고", "근무하고", "활동하고", "라이더로"]):
                 user_msg += "\n\n⚠️ 매우 중요: 이미 새로운 일을 시작했다면 실업 상태가 아니므로 실업급여 신청 자체가 불가능합니다!"
         
-        # API 키 정리 및 헤더 구성 - 핵심 수정!
-        api_key = config.OPENROUTER_API_KEY.strip()
+        # OpenRouter 예제대로 OpenAI 클라이언트 사용
+        logger.info(f"Using OpenAI SDK with model: {config.MODEL_NAME}")
         
-        # 최소 헤더로 단순화 (인증 테스트용)
-        headers = {
-            "Authorization": f"Bearer {config.OPENROUTER_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        # HTTP-Referer, X-Title은 인증 성공 후 추가
+        client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=config.OPENROUTER_API_KEY,
+        )
         
-        # 디버깅 로그
-        logger.info(f"Using model: {config.MODEL_NAME}")
-        logger.info(f"API key valid: {api_key.startswith('sk-or-v1-')}")
-        
-        data = {
-            "model": config.MODEL_NAME,
-            "messages": [
+        # OpenRouter 예제대로 호출
+        completion = client.chat.completions.create(
+            extra_headers={
+                "HTTP-Referer": "https://sudanghelp.co.kr",
+                "X-Title": "Sudanghelp Chat",
+            },
+            model="qwen/qwen3-235b-a22b-2507",  # 예제와 동일한 모델명
+            messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_msg}
             ],
-            "temperature": 0.2,
-            "max_tokens": config.MAX_OUTPUT_TOKENS
-        }
-        
-        response = requests.post(
-            f"{config.API_BASE_URL}/chat/completions",
-            headers=headers,
-            json=data,
-            timeout=30
+            temperature=0.2,
+            max_tokens=config.MAX_OUTPUT_TOKENS
         )
         
-        if response.status_code == 200:
-            result = response.json()
-            answer = result['choices'][0]['message']['content']
-        else:
-            logger.error(f"API Response Error: {response.status_code} - {response.text[:200]}")
-            return "일시적 오류가 발생했습니다. 고용노동부 상담센터 1350으로 문의하세요."
+        # 응답 처리
+        answer = completion.choices[0].message.content
+        logger.info("OpenAI SDK call successful")
         
         # 답변 검증
         answer = validate_answer(answer, question)
@@ -471,14 +461,8 @@ def generate_ai_answer(question, calc_data=None):
         
         return answer
         
-    except requests.exceptions.ConnectionError as e:
-        logger.error(f"Connection error: {e}")
-        return "일시적 오류가 발생했습니다. 고용노동부 상담센터 1350으로 문의하세요."
-    except requests.exceptions.Timeout as e:
-        logger.error(f"Timeout error: {e}")
-        return "응답 시간이 초과되었습니다. 잠시 후 다시 시도해주세요."
     except Exception as e:
-        logger.error(f"API error: {e}")
+        logger.error(f"OpenAI SDK error: {str(e)}")
         
         # API 실패시 fallback
         if "권고사직" in question:
