@@ -1,70 +1,73 @@
 import os
-import sys
+import re
 from dotenv import load_dotenv
 
-# .env 파일이 있으면 로드 (로컬 개발용)
+# .env 파일 로드
 load_dotenv()
 
-# 환경변수 디버깅 부분을 찾아서 수정
-print("=== ENVIRONMENT VARIABLES DEBUG ===")
-for key in sorted(os.environ.keys()):
-    if 'API' in key.upper() or 'KEY' in key.upper():
-        print(f"{key}: [HIDDEN]")  # 값을 완전히 숨김
-
-# API Key 가져오기 (환경변수에서)
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
-
-# 가능한 모든 변수명 시도
-possible_keys = [
-    'OPENROUTER_API_KEY',
-    'openrouter_api_key',
-    'OPENROUTER_API',
-    'openrouter_api'
-]
-
-for key in possible_keys:
-    value = os.getenv(key, "").strip()
-    if value:
-        OPENROUTER_API_KEY = value
-        print(f"Found API key in: {key}")
-        break
-
-# 그래도 못 찾으면 수동으로 검색
-if not OPENROUTER_API_KEY:
-    for key, value in os.environ.items():
-        if 'OPENROUTER' in key.upper():
-            OPENROUTER_API_KEY = value.strip()
-            print(f"Found API key in environ: {key}")
-            break
-        
-# API Key 검증 부분을 이렇게 수정
-if not OPENROUTER_API_KEY:
-    print("WARNING: OPENROUTER_API_KEY not found in environment")
-    print(f"Available env vars (first 20): {list(os.environ.keys())[:20]}")
+def clean_api_key(key):
+    """API 키에서 모든 공백 문자 제거하고 정리"""
+    if not key:
+        return ""
     
-    # Railway에서 실행 중이면 더미 키 사용
-    if os.getenv("RAILWAY_ENVIRONMENT"):
-        print("ERROR: API key must be set in Railway Variables")
-        sys.exit(1)  # 더미 키로 실행 방지
-    else:
-        # 로컬에서는 종료
-        print("ERROR: Set OPENROUTER_API_KEY in environment")
-        sys.exit(1)
-        
+    # 1. 모든 공백 문자(줄바꿈, 탭, 스페이스 등) 제거
+    key = re.sub(r'\s+', '', key)
+    
+    # 2. sk-or-v1-로 시작하는 부분만 추출
+    match = re.search(r'(sk-or-v1-[a-zA-Z0-9]+)', key)
+    if match:
+        return match.group(1)
+    
+    # 3. sk-or-v1이 포함되어 있으면 재조합 시도
+    if 'sk-or-v1' in key:
+        # sk-or-v1 이후의 모든 알파벳/숫자 추출
+        parts = key.split('sk-or-v1')
+        if len(parts) > 1:
+            # 특수문자 제거하고 알파벳/숫자만 남김
+            clean_suffix = re.sub(r'[^a-zA-Z0-9]', '', parts[1])
+            if clean_suffix:
+                return f'sk-or-v1-{clean_suffix}'
+    
+    # 4. 그래도 안되면 원본 반환 (공백은 제거된 상태)
+    return key
+
+# Railway 환경변수에서 API 키 가져오기
+raw_key = os.getenv("OPENROUTER_API_KEY", "")
+
+# 줄바꿈 문제 해결
+OPENROUTER_API_KEY = clean_api_key(raw_key)
+
+# 디버깅 출력
+print("=== API KEY DEBUG ===")
+print(f"Raw key length: {len(raw_key)}")
+print(f"Raw key has newline: {chr(10) in raw_key}")
+print(f"Raw key has carriage return: {chr(13) in raw_key}")
+print(f"Raw key repr (first 50): {repr(raw_key[:50]) if raw_key else 'Empty'}")
+print(f"Cleaned key length: {len(OPENROUTER_API_KEY)}")
+print(f"Cleaned key valid: {OPENROUTER_API_KEY.startswith('sk-or-v1-')}")
+
+# 검증
+if not OPENROUTER_API_KEY:
+    print("ERROR: No API key found after cleaning")
+    # Railway에서도 일단 시작하도록 (디버깅용)
+    OPENROUTER_API_KEY = "dummy-key-for-debugging"
+elif not OPENROUTER_API_KEY.startswith("sk-or-v1-"):
+    print(f"WARNING: Invalid key format after cleaning: {OPENROUTER_API_KEY[:20]}")
+else:
+    print(f"SUCCESS: API Key loaded: {OPENROUTER_API_KEY[:15]}...")
+
 # API 설정
 API_PROVIDER = "openrouter"
-MODEL_NAME = "qwen/qwen3-235b-a22b-instruct-2507"
+MODEL_NAME = "qwen/qwen-2.5-72b-instruct"  # 모델명도 업데이트
 API_BASE_URL = "https://openrouter.ai/api/v1"
 
-# 토큰 제한 설정 (증가)
-MAX_INPUT_LENGTH = 400  # 300 → 400
-MAX_OUTPUT_TOKENS = 900  # 800 → 900
-
-# 개발 환경 설정
+# 나머지 설정들...
+MAX_INPUT_LENGTH = 400
+MAX_OUTPUT_TOKENS = 900
 ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
 MASTER_FINGERPRINTS = ["DEV_FINGERPRINT", "test999"]
 
-# ===== 2025년 현재 정보 (정확한 수치) =====
+# 2025년 현재 정보
 CURRENT_INFO = """
 - 일 상한액: 66,000원
 - 일 하한액: 64,192원 (최저임금의 80%)
@@ -75,7 +78,7 @@ CURRENT_INFO = """
 - 자영업자 피보험자: 폐업 전 24개월 내 1년 이상시 120~210일
 """
 
-# ===== 계산기 안내 =====
+# 계산기 안내
 CALCULATION_GUIDE = """실업급여 계산은 개인별 상황에 따라 달라집니다.
 
 정확한 계산은 여기서 해보세요:
@@ -86,7 +89,7 @@ CALCULATION_GUIDE = """실업급여 계산은 개인별 상황에 따라 달라�
 - 연령  
 - 고용보험 가입기간"""
 
-# ===== 중요 케이스 하드코딩 (2025년 버전) =====
+# 중요 케이스 하드코딩
 FALLBACK_ANSWERS = {
     "권고사직_사직서": """네, 사직서를 작성했어도 권고사직으로 인정받을 수 있습니다.
 
@@ -175,7 +178,7 @@ FALLBACK_ANSWERS = {
 <a href="https://sudanghelp.co.kr/unemployment/" target="_blank" style="background:#0066ff;color:white;padding:8px 16px;border-radius:4px;text-decoration:none;display:inline-block;margin:10px 0">📊 실업급여 계산기 바로가기</a>"""
 }
 
-# ===== AI 시스템 프롬프트 (2025년 정확한 정보) =====
+# AI 시스템 프롬프트
 SYSTEM_PROMPT = """당신은 한국 실업급여 전문 상담사입니다.
 
 [절대 규칙 - 2025년 8월 정답]
@@ -222,27 +225,8 @@ SYSTEM_PROMPT = """당신은 한국 실업급여 전문 상담사입니다.
 - 수급일수 × 일급 계산 금지
 - "180일 근무 = 180일 수급" 같은 오해 금지
 
-안내 규칙:
-- 자격/조건 확인 → "자세한 조건은 가이드를 참고하세요"
-- 금액 계산 → 계산기 버튼 표시
-- 복잡한 상황 → 가이드 + 계산기 둘 다
-
-금액 질문 표준 답변:
-"실업급여 조건이 충족된다는 전제 하에,
-자세한 조건: 가이드 참고
-정확한 금액: <a href="https://sudanghelp.co.kr/unemployment/" target="_blank">📊 실업급여 계산기 바로가기</a>"
-
 현재 기준:
 {current_info}
-
-핵심 규칙:
-1. FAQ는 참고만, 사용자의 구체적 수치(근무기간, 임금)를 180일, 상한/하한액 규칙에 직접 대입하여 답변
-2. 정확한 정보만 제공 (추측 금지)
-3. 불확실하면 "고용노동부 상담센터 1350" 안내
-
-계산기 안내:
-- 반드시 이 형태로: <a href="https://sudanghelp.co.kr/unemployment/" target="_blank">📊 실업급여 계산기 바로가기</a>
-- 단순 URL 텍스트 금지
 
 답변 구조:
 - 결론 먼저 (가능/불가능)
@@ -250,14 +234,14 @@ SYSTEM_PROMPT = """당신은 한국 실업급여 전문 상담사입니다.
 - 계산기 링크 (금액 관련시)
 - 한국어로 2-4문단, 500자 이내"""
 
-# ===== FAQ 설정 =====
+# FAQ 설정
 FAQ_CONFIG = {
-    "min_threshold": 2.5,  # 최소 관련도 점수 유지
-    "max_faqs": 2,         # 최대 주입 FAQ 수
-    "max_tokens": 150      # 100 → 150 증가
+    "min_threshold": 2.5,
+    "max_faqs": 2,
+    "max_tokens": 150
 }
 
-# ===== 실업급여 키워드 (2025년 확장) =====
+# 실업급여 키워드
 UNEMPLOYMENT_KEYWORDS = [
     '실업급여', '실업', '급여', '구직급여', '구직', '고용보험', '고용센터',
     '실직', '퇴사', '퇴직', '해고', '권고사직', '계약만료', '폐업',
@@ -266,17 +250,15 @@ UNEMPLOYMENT_KEYWORDS = [
     '상한액', '하한액', '지급액', '신청', '자격', '조건',
     '4대보험', '고용', '보험', '노동부', '노동청',
     '프리랜서', '정규직', '그만뒀', '그만둔',
-    # 추가 키워드
     '일주일', '주3일', '주4일', '주5일', '계약직', '월급',
     '아르바이트', '알바', '65세', '66세', '고령자',
     '임금체불', '체불', '반복수급', '감액', '구직외활동',
-    # 2025년 추가
     '받았', '받으면', '깎이', '작년', '올해',
     '3번', '4번', '5번', '횟수', '차', '자영업', '폐업',
     '조기재취업', '청년', '구직촉진', '부정수급'
 ]
 
-# ===== 로깅 설정 =====
+# 로깅 설정
 LOGGING_CONFIG = {
     'version': 1,
     'disable_existing_loggers': False,
