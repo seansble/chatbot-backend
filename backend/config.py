@@ -9,7 +9,6 @@ def clean_key(s):
     """모든 비가시 문자 제거"""
     if not s:
         return ""
-    # BOM, 제로폭 공백, 줄바꿈 모두 제거
     return (
         s.replace("\ufeff", "")
         .replace("\u200b", "")
@@ -19,20 +18,20 @@ def clean_key(s):
     )
 
 
-# 환경변수에서 키 가져오기
-OPENROUTER_API_KEY = clean_key(os.getenv("OPENROUTER_API_KEY", ""))
+# Together AI로 변경
+TOGETHER_API_KEY = clean_key(os.getenv("TOGETHER_API_KEY", ""))
 
-# 키 검증 - 실패시 앱 종료
-if not OPENROUTER_API_KEY.startswith("sk-or-v1-") or len(OPENROUTER_API_KEY) < 40:
-    print(f"FATAL: Invalid API key (len={len(OPENROUTER_API_KEY)})")
-    print(f"Key prefix: {OPENROUTER_API_KEY[:10] if OPENROUTER_API_KEY else 'EMPTY'}")
+# 키 검증
+if not TOGETHER_API_KEY or len(TOGETHER_API_KEY) < 20:
+    print(f"FATAL: Invalid TOGETHER API key")
     sys.exit(1)
 
-print(f"API Key loaded successfully: {OPENROUTER_API_KEY[:15]}...")
+print(f"Together AI Key loaded successfully")
 
-# 모델명 단순화 (먼저 auto로 테스트)
-MODEL_NAME = "qwen/qwen3-235b-a22b-2507"
-API_BASE_URL = "https://openrouter.ai/api/v1"
+# API 설정
+API_BASE_URL = "https://api.together.xyz/v1"
+OPENROUTER_API_KEY = TOGETHER_API_KEY  # 기존 변수명 유지
+MODEL_NAME = "Qwen/Qwen3-235B-A22B-Instruct-2507-tput"
 
 # 나머지 설정들
 MAX_INPUT_LENGTH = 400
