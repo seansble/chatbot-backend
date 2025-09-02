@@ -100,44 +100,39 @@ FAQS = load_knowledge()
 
 
 def calculate_faq_relevance(query, faq):
-    """FAQ와 질문의 관련성 점수 계산"""
+    """FAQ와 질문의 관련성 점수 계산 - knowledge.json 활용"""
     query_lower = query.lower()
-    faq_q_lower = faq["q"].lower()
-    faq_a_lower = faq.get("a_short", faq["a"]).lower()
-    
     score = 0.0
     
-    # 질문 유사도
+    # context_match 체크
+    if "context_match" in faq:
+        matches = sum(1 for keyword in faq["context_match"] if keyword in query_lower)
+        score += matches * 0.2
+    
+    # context_exclude 체크
+    if "context_exclude" in faq:
+        for exclude in faq["context_exclude"]:
+            if exclude in query_lower:
+                return 0  # 제외 키워드가 있으면 0점
+    
+    # context_require_any 체크
+    if "context_require_any" in faq:
+        if not any(req in query_lower for req in faq["context_require_any"]):
+            return 0  # 필수 키워드가 하나도 없으면 0점
+    
+    # priority 보너스
+    if "priority" in faq:
+        score += faq["priority"] * 0.05
+    
+    # 기본 토큰 매칭
     q_tokens = tokenize(query)
     faq_tokens = faq["_tokens"]
     overlap = len(q_tokens & faq_tokens)
     
     if len(q_tokens) > 0:
-        score = overlap / len(q_tokens)
+        score += overlap / len(q_tokens) * 0.5
     
-    # 카테고리별 보정
-    if "자진퇴사" in query_lower:
-        if faq["category"] == "자진퇴사":
-            # 예외사유가 있으면 점수 증가
-            if any(exc in query_lower for exc in ["임금체불", "괴롭힘", "통근", "질병"]):
-                score += 0.5
-            # 계약 관련이면 점수 감소
-            elif "계약" in query_lower:
-                score -= 0.3
-        elif faq["category"] == "계약만료" and "계약" in query_lower:
-            score += 0.4
-    
-    if "계약" in query_lower and faq["category"] == "계약만료":
-        score += 0.3
-    
-    if "반복수급" in query_lower and faq["category"] == "반복수급":
-        score += 0.4
-    
-    # 년도와 개월이 함께 있으면 180일 계산 FAQ 점수 감소
-    if "년" in query_lower and "개월" in query_lower and faq["id"] == "K-001":
-        score -= 0.5
-    
-    return max(0, score)
+    return min(1.0, score)  # 최대 1.0
 
 
 def retrieve_faq(query, max_faqs=2):
