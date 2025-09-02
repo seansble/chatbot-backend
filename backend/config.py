@@ -5,31 +5,33 @@ from dotenv import load_dotenv
 # .env 파일 로드
 load_dotenv()
 
+
 def clean_api_key(key):
     """API 키에서 모든 공백 문자 제거하고 정리"""
     if not key:
         return ""
-    
+
     # 1. 모든 공백 문자(줄바꿈, 탭, 스페이스 등) 제거
-    key = re.sub(r'\s+', '', key)
-    
+    key = re.sub(r"\s+", "", key)
+
     # 2. sk-or-v1-로 시작하는 부분만 추출
-    match = re.search(r'(sk-or-v1-[a-zA-Z0-9]+)', key)
+    match = re.search(r"(sk-or-v1-[a-zA-Z0-9]+)", key)
     if match:
         return match.group(1)
-    
+
     # 3. sk-or-v1이 포함되어 있으면 재조합 시도
-    if 'sk-or-v1' in key:
+    if "sk-or-v1" in key:
         # sk-or-v1 이후의 모든 알파벳/숫자 추출
-        parts = key.split('sk-or-v1')
+        parts = key.split("sk-or-v1")
         if len(parts) > 1:
             # 특수문자 제거하고 알파벳/숫자만 남김
-            clean_suffix = re.sub(r'[^a-zA-Z0-9]', '', parts[1])
+            clean_suffix = re.sub(r"[^a-zA-Z0-9]", "", parts[1])
             if clean_suffix:
-                return f'sk-or-v1-{clean_suffix}'
-    
+                return f"sk-or-v1-{clean_suffix}"
+
     # 4. 그래도 안되면 원본 반환 (공백은 제거된 상태)
     return key
+
 
 # Railway 환경변수에서 API 키 가져오기
 raw_key = os.getenv("OPENROUTER_API_KEY", "")
@@ -56,12 +58,12 @@ elif not OPENROUTER_API_KEY.startswith("sk-or-v1-"):
 else:
     print(f"SUCCESS: API Key loaded: {OPENROUTER_API_KEY[:15]}...")
 
-# API 설정
+# API 설정 - 모델명 수정!!
 API_PROVIDER = "openrouter"
-MODEL_NAME = "qwen/qwen-2.5-72b-instruct"  # 모델명도 업데이트
+MODEL_NAME = "qwen/qwen3-235b-a22b-instruct-2507"  # 정확한 모델명으로 변경!
 API_BASE_URL = "https://openrouter.ai/api/v1"
 
-# 나머지 설정들...
+# 나머지 설정들
 MAX_INPUT_LENGTH = 400
 MAX_OUTPUT_TOKENS = 900
 ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
@@ -104,7 +106,6 @@ FALLBACK_ANSWERS = {
 <a href="https://sudanghelp.co.kr/unemployment/" target="_blank" style="background:#0066ff;color:white;padding:8px 16px;border-radius:4px;text-decoration:none;display:inline-block;margin:10px 0">📊 실업급여 계산기 바로가기</a>
 
 문의: 고용노동부 상담센터 1350""",
-
     "자진퇴사": """자진퇴사는 원칙적으로 실업급여를 받을 수 없습니다.
 
 예외적으로 인정되는 경우:
@@ -119,7 +120,6 @@ FALLBACK_ANSWERS = {
 <a href="https://sudanghelp.co.kr/unemployment/" target="_blank" style="background:#0066ff;color:white;padding:8px 16px;border-radius:4px;text-decoration:none;display:inline-block;margin:10px 0">📊 실업급여 계산기 바로가기</a>
 
 자세한 상담: 고용노동부 상담센터 1350""",
-
     "반복수급_감액": """2025년 반복수급자 감액 기준:
 - 3회째: 10% 감액
 - 4회째: 25% 감액  
@@ -130,7 +130,6 @@ FALLBACK_ANSWERS = {
 ※ 일용직, 정당한 이직 사유는 횟수에서 제외
 
 <a href="https://sudanghelp.co.kr/unemployment/" target="_blank" style="background:#0066ff;color:white;padding:8px 16px;border-radius:4px;text-decoration:none;display:inline-block;margin:10px 0">📊 실업급여 계산기 바로가기</a>""",
-
     "구직활동_횟수": """구직활동 요건:
 - 1차~4차: 각 1회
 - 5차부터: 각 2회 (최소 1회는 실제 구직활동)
@@ -141,7 +140,6 @@ FALLBACK_ANSWERS = {
 - 2025년부터 온라인 실업인정 원칙
 
 워크넷 이용시 자동으로 인정되니 가장 편리합니다.""",
-
     "자영업자": """자영업자도 고용보험 가입시 실업급여 가능합니다.
 
 요건: 폐업 전 24개월 내 피보험기간 1년 이상
@@ -149,21 +147,18 @@ FALLBACK_ANSWERS = {
 필요서류: 폐업 증명서류, 매출 감소 증빙
 
 <a href="https://sudanghelp.co.kr/unemployment/" target="_blank" style="background:#0066ff;color:white;padding:8px 16px;border-radius:4px;text-decoration:none;display:inline-block;margin:10px 0">📊 실업급여 계산기 바로가기</a>""",
-
     "조기재취업수당": """조기재취업수당 (2025년 개선):
 - 지급액: 잔여 급여일수의 2/3 (67%)
 - 조건: 대기기간 7일 + 수급기간 1/2 이전 재취업
 - 12개월 이상 고용 유지 필수
 
 <a href="https://sudanghelp.co.kr/unemployment/" target="_blank" style="background:#0066ff;color:white;padding:8px 16px;border-radius:4px;text-decoration:none;display:inline-block;margin:10px 0">📊 실업급여 계산기 바로가기</a>""",
-
     "부정수급": """부정수급 처벌 (2025년 강화):
 - 적발시 받은 금액의 5배 추징 (기존 3배)
 - 형사처벌 + 명단 공개
 - 향후 3년간 실업급여 제한
 
 허위 구직활동, 취업 사실 은닉 등 모두 해당됩니다.""",
-
     "금액_계산_금지": """실업급여 조건이 충족된다는 전제 하에,
 정확한 금액 계산은 복잡한 요소가 많습니다:
 
@@ -175,7 +170,7 @@ FALLBACK_ANSWERS = {
 - 수급일수는 근무기간과 연령에 따라 120~270일
 
 정확한 계산은 계산기를 이용하세요:
-<a href="https://sudanghelp.co.kr/unemployment/" target="_blank" style="background:#0066ff;color:white;padding:8px 16px;border-radius:4px;text-decoration:none;display:inline-block;margin:10px 0">📊 실업급여 계산기 바로가기</a>"""
+<a href="https://sudanghelp.co.kr/unemployment/" target="_blank" style="background:#0066ff;color:white;padding:8px 16px;border-radius:4px;text-decoration:none;display:inline-block;margin:10px 0">📊 실업급여 계산기 바로가기</a>""",
 }
 
 # AI 시스템 프롬프트
@@ -235,66 +230,116 @@ SYSTEM_PROMPT = """당신은 한국 실업급여 전문 상담사입니다.
 - 한국어로 2-4문단, 500자 이내"""
 
 # FAQ 설정
-FAQ_CONFIG = {
-    "min_threshold": 2.5,
-    "max_faqs": 2,
-    "max_tokens": 150
-}
+FAQ_CONFIG = {"min_threshold": 2.5, "max_faqs": 2, "max_tokens": 150}
 
 # 실업급여 키워드
 UNEMPLOYMENT_KEYWORDS = [
-    '실업급여', '실업', '급여', '구직급여', '구직', '고용보험', '고용센터',
-    '실직', '퇴사', '퇴직', '해고', '권고사직', '계약만료', '폐업',
-    '수급자격', '수급', '실업인정', '구직활동', '재취업', '취업활동',
-    '워크넷', '이직확인서', '이직', '급여일수', '소정급여',
-    '상한액', '하한액', '지급액', '신청', '자격', '조건',
-    '4대보험', '고용', '보험', '노동부', '노동청',
-    '프리랜서', '정규직', '그만뒀', '그만둔',
-    '일주일', '주3일', '주4일', '주5일', '계약직', '월급',
-    '아르바이트', '알바', '65세', '66세', '고령자',
-    '임금체불', '체불', '반복수급', '감액', '구직외활동',
-    '받았', '받으면', '깎이', '작년', '올해',
-    '3번', '4번', '5번', '횟수', '차', '자영업', '폐업',
-    '조기재취업', '청년', '구직촉진', '부정수급'
+    "실업급여",
+    "실업",
+    "급여",
+    "구직급여",
+    "구직",
+    "고용보험",
+    "고용센터",
+    "실직",
+    "퇴사",
+    "퇴직",
+    "해고",
+    "권고사직",
+    "계약만료",
+    "폐업",
+    "수급자격",
+    "수급",
+    "실업인정",
+    "구직활동",
+    "재취업",
+    "취업활동",
+    "워크넷",
+    "이직확인서",
+    "이직",
+    "급여일수",
+    "소정급여",
+    "상한액",
+    "하한액",
+    "지급액",
+    "신청",
+    "자격",
+    "조건",
+    "4대보험",
+    "고용",
+    "보험",
+    "노동부",
+    "노동청",
+    "프리랜서",
+    "정규직",
+    "그만뒀",
+    "그만둔",
+    "일주일",
+    "주3일",
+    "주4일",
+    "주5일",
+    "계약직",
+    "월급",
+    "아르바이트",
+    "알바",
+    "65세",
+    "66세",
+    "고령자",
+    "임금체불",
+    "체불",
+    "반복수급",
+    "감액",
+    "구직외활동",
+    "받았",
+    "받으면",
+    "깎이",
+    "작년",
+    "올해",
+    "3번",
+    "4번",
+    "5번",
+    "횟수",
+    "차",
+    "자영업",
+    "폐업",
+    "조기재취업",
+    "청년",
+    "구직촉진",
+    "부정수급",
 ]
 
 # 로깅 설정
 LOGGING_CONFIG = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'formatters': {
-        'default': {
-            'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "default": {"format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"},
+        "detailed": {
+            "format": "%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s"
         },
-        'detailed': {
-            'format': '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s'
-        }
     },
-    'handlers': {
-        'console': {
-            'class': 'logging.StreamHandler',
-            'level': 'INFO',
-            'formatter': 'default'
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "level": "INFO",
+            "formatter": "default",
         },
-        'file': {
-            'class': 'logging.handlers.RotatingFileHandler',
-            'level': 'INFO',
-            'formatter': 'detailed',
-            'filename': 'logs/app.log',
-            'maxBytes': 10485760,
-            'backupCount': 5
+        "file": {
+            "class": "logging.handlers.RotatingFileHandler",
+            "level": "INFO",
+            "formatter": "detailed",
+            "filename": "logs/app.log",
+            "maxBytes": 10485760,
+            "backupCount": 5,
         },
-        'error_file': {
-            'class': 'logging.handlers.RotatingFileHandler',
-            'level': 'ERROR',
-            'formatter': 'detailed',
-            'filename': 'logs/error.log',
-            'maxBytes': 10485760,
-            'backupCount': 5
-        }
+        "error_file": {
+            "class": "logging.handlers.RotatingFileHandler",
+            "level": "ERROR",
+            "formatter": "detailed",
+            "filename": "logs/error.log",
+            "maxBytes": 10485760,
+            "backupCount": 5,
+        },
     },
-    'root': {
-        'level': 'INFO',
-        'handlers': ['console', 'file', 'error_file']
-    }
+    "root": {"level": "INFO", "handlers": ["console", "file", "error_file"]},
 }

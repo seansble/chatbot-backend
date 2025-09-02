@@ -4,7 +4,7 @@ from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.middleware.proxy_fix import ProxyFix
-import requests  # OpenAI 대신 requests 사용
+import requests
 import re
 import logging
 import logging.config
@@ -35,7 +35,7 @@ app.config.update(
 )
 
 CORS(app, 
-     origins=['*'],  # 모든 도메인 허용
+     origins=['*'],
      supports_credentials=True)
 
 # Rate Limiting 설정
@@ -58,7 +58,7 @@ calculator_users = {}
 daily_usage = defaultdict(lambda: {"date": None, "count": 0})
 feedback_counts = defaultdict(lambda: {"like": 0, "dislike": 0})
 
-# ===== FAQ 시스템 =====
+# FAQ 시스템
 TOKEN_RE = re.compile(r'[가-힣]{2,}|[A-Za-z]+|\d+')
 
 def normalize_text(text):
@@ -78,7 +78,6 @@ def load_knowledge():
             data = json.load(f)
             faqs = data.get('faqs', [])
             
-            # 토큰화 추가
             for faq in faqs:
                 faq['_tokens'] = tokenize(faq['q'] + ' ' + faq.get('a_short', faq['a']))
             
@@ -144,7 +143,7 @@ def retrieve_faq(query, max_faqs=2, max_tokens=150):
     
     return results
 
-# 금액 계산 의도 감지
+# 금액 계산 의도 감지 - 개선
 RX_NUM = r"(?:\d{1,3}(?:,\d{3})+|\d+)"
 ASK_AMT = re.compile(r"(얼마|금액|일액|일당|월급|상한|하한|수당|총액|받(?:나요|아|을까요)|나오(?:나요|니|게))")
 HAS_NUMW = re.compile(fr"{RX_NUM}\s*(원|만원)")
@@ -152,8 +151,13 @@ VERB_CALC = re.compile(r"(계산|산정|얼추|대략)\s*(해|해줘|가능|방�
 INFO_ONLY = re.compile(r"(상한|하한|기준|정의|의미|뭐[야|에요])")
 
 def detect_amount_intent(q: str) -> str:
-    """금액 계산 의도 감지"""
+    """금액 계산 의도 감지 - 개선"""
     t = unicodedata.normalize("NFKC", q).lower()
+    
+    # 근무기간 질문은 제외
+    if "얼마나 일" in t or "얼마나 근무" in t or "몇 개월" in t or "얼마나 다녀" in t:
+        return None
+    
     hits = 0
     hits += 1 if ASK_AMT.search(t) else 0
     hits += 1 if HAS_NUMW.search(t) else 0
@@ -249,7 +253,12 @@ def mark_calculator_usage(keys):
         calculator_users[keys['cookie']] = True
 
 def is_unemployment_related(question):
-    """실업급여 관련 질문인지 체크"""
+    """실업급여 관련 질문인지 체크 - 완화"""
+    # 실업급여가 직접 포함되면 무조건 통과
+    if "실업급여" in question or "실업 급여" in question:
+        return True
+    
+    # 키워드 체크
     return any(keyword in question.lower() for keyword in config.UNEMPLOYMENT_KEYWORDS)
 
 def check_malicious_input(text):
@@ -327,7 +336,7 @@ def validate_answer(answer, question):
     return answer
 
 def generate_ai_answer(question, calc_data=None):
-    """AI 답변 생성 - requests 사용"""
+    """AI 답변 생성 - 최소 헤더"""
     try:
         # 금액 계산 의도 차단
         if detect_amount_intent(question) == "AMOUNT_CALC":
@@ -411,12 +420,10 @@ def generate_ai_answer(question, calc_data=None):
             if any(word in question for word in ["일하고", "근무하고", "활동하고", "라이더로"]):
                 user_msg += "\n\n⚠️ 매우 중요: 이미 새로운 일을 시작했다면 실업 상태가 아니므로 실업급여 신청 자체가 불가능합니다!"
         
-        # requests로 OpenRouter API 직접 호출
+        # 최소 헤더로 API 호출
         headers = {
             "Authorization": f"Bearer {config.OPENROUTER_API_KEY}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://sudanghelp.co.kr",
-            "X-Title": "Sudanghelp Unemployment Chat"
+            "Content-Type": "application/json"
         }
         
         data = {
@@ -480,7 +487,7 @@ def postprocess_answer(answer):
     # 마크다운 제거
     answer = answer.replace('**', '').replace('###', '').replace('##', '').replace('#', '')
     
-    # 계산기 URL을 클릭 가능한 형태로 변환
+    # 계산기 URL 변환
     answer = re.sub(
         r'계산기:\s*(https://sudanghelp\.co\.kr/unemployment/?)',
         r'<a href="\1" target="_blank" style="background:#0066ff;color:white;padding:8px 16px;border-radius:4px;text-decoration:none;display:inline-block;margin:10px 0">📊 실업급여 계산기 바로가기</a>',
@@ -498,20 +505,21 @@ def postprocess_answer(answer):
     
     return answer
 
-# 루트 경로 - Railway 헬스체크용
+# 루트 경로
 @app.route("/", methods=["GET"])
 def index():
     """루트 경로 - Railway 헬스체크용"""
     return jsonify({
         "service": "Unemployment Benefits Chat API",
         "status": "running",
-        "version": "2025.08.28",
+        "version": "2025.08.30",
         "endpoints": {
             "health": "/health",
             "chat": "/api/chat",
             "feedback": "/api/feedback",
             "calculator": "/api/mark-calculator-used",
-            "test": "/api/test-openrouter"
+            "test": "/api/test-openrouter",
+            "debug": "/api/debug"
         }
     })
 
@@ -522,10 +530,27 @@ def health_check():
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "model": config.MODEL_NAME,
-        "version": "2025.08.28"
+        "version": "2025.08.30",
+        "openrouter_key_len": len(config.OPENROUTER_API_KEY) if config.OPENROUTER_API_KEY else 0
     })
 
-# OpenRouter 연결 테스트 엔드포인트 추가
+# 디버그 엔드포인트 추가
+@app.route("/api/debug", methods=["GET"])
+def debug_info():
+    """환경 디버그 정보"""
+    return jsonify({
+        "key_exists": bool(config.OPENROUTER_API_KEY),
+        "key_length": len(config.OPENROUTER_API_KEY) if config.OPENROUTER_API_KEY else 0,
+        "key_prefix": config.OPENROUTER_API_KEY[:15] if config.OPENROUTER_API_KEY else "N/A",
+        "key_starts_with_valid": config.OPENROUTER_API_KEY.startswith("sk-or-v1-") if config.OPENROUTER_API_KEY else False,
+        "model": config.MODEL_NAME,
+        "base_url": config.API_BASE_URL,
+        "has_newline": "\\n" in (config.OPENROUTER_API_KEY or ""),
+        "has_space": " " in (config.OPENROUTER_API_KEY or ""),
+        "railway_env": bool(os.getenv("RAILWAY_ENVIRONMENT"))
+    })
+
+# OpenRouter 연결 테스트
 @app.route("/api/test-openrouter", methods=["GET"])
 def test_openrouter():
     """OpenRouter 연결 테스트"""
@@ -722,7 +747,7 @@ def chat():
             "answer_hash": answer_hash,
             "sources": [],
             "remaining": remaining,
-            "updated": "2025-08-28"
+            "updated": "2025-08-30"
         }))
         
         # 쿠키 설정
