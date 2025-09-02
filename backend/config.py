@@ -31,7 +31,9 @@ if not OPENROUTER_API_KEY.startswith("sk-or-v1-") or len(OPENROUTER_API_KEY) < 4
 print(f"API Key loaded successfully: {OPENROUTER_API_KEY[:15]}...")
 
 # 모델명 단순화 (먼저 auto로 테스트)
-MODEL_NAME = "meta-llama/llama-3.3-8b-instruct:free"  # 테스트 후 "qwen/qwen3-235b-a22b-instruct-2507"로 변경
+MODEL_NAME = (
+    "qwen/qwen3-235b-a22b-2507"  # 테스트 후 "qwen/qwen3-235b-a22b-instruct-2507"로 변경
+)
 API_BASE_URL = "https://openrouter.ai/api/v1"
 
 # 나머지 설정들
