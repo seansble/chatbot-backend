@@ -21,7 +21,7 @@ import unicodedata
 import config
 
 # 필요한 폴더들 생성
-for folder in ["logs", "qa_logs", "data"]:
+for folder in ["logs", "qa_logs", "data", "stats"]:
     if not os.path.exists(folder):
         os.makedirs(folder)
 
@@ -63,121 +63,62 @@ calculator_users = {}
 daily_usage = defaultdict(lambda: {"date": None, "count": 0})
 feedback_counts = defaultdict(lambda: {"like": 0, "dislike": 0})
 
-# FAQ 시스템
-TOKEN_RE = re.compile(r"[가-힣]{2,}|[A-Za-z]+|\d+")
+# 통계 관리
+STATS_FILE = "stats/site_stats.json"
+VISITORS_FILE = "stats/visitors.txt"
 
-
-def normalize_text(text):
-    """텍스트 정규화"""
-    return unicodedata.normalize("NFKC", text)
-
-
-def tokenize(text):
-    """간단한 토큰화"""
-    text = normalize_text(text)
-    tokens = [t.lower() for t in TOKEN_RE.findall(text)]
-    return set(tokens)
-
-
-def load_knowledge():
-    """FAQ 데이터 로드"""
+def load_stats():
+    """통계 로드"""
     try:
-        with open("data/knowledge.json", "r", encoding="utf-8") as f:
-            data = json.load(f)
-            faqs = data.get("faqs", [])
+        with open(STATS_FILE, 'r') as f:
+            return json.load(f)
+    except:
+        # 초기값: 방문자 1500명부터 시작
+        return {
+            "total_visitors": 1500,
+            "total_likes": 0,
+            "last_updated": datetime.now().isoformat()
+        }
 
-            for faq in faqs:
-                faq["_tokens"] = tokenize(faq["q"] + " " + faq.get("a_short", faq["a"]))
+def save_stats(stats):
+    """통계 저장"""
+    try:
+        stats["last_updated"] = datetime.now().isoformat()
+        with open(STATS_FILE, 'w') as f:
+            json.dump(stats, f)
+    except Exception as e:
+        logger.error(f"Stats save error: {e}")
 
-            return faqs
-    except FileNotFoundError:
-        logger.warning("knowledge.json not found, using empty FAQ")
-        return []
-
-
-# FAQ 로드
-FAQS = load_knowledge()
-
-
-def calculate_faq_relevance(query, faq):
-    """FAQ와 질문의 관련성 점수 계산 - knowledge.json 활용"""
-    query_lower = query.lower()
-    score = 0.0
-    
-    # context_match 체크
-    if "context_match" in faq:
-        matches = sum(1 for keyword in faq["context_match"] if keyword in query_lower)
-        score += matches * 0.2
-    
-    # context_exclude 체크
-    if "context_exclude" in faq:
-        for exclude in faq["context_exclude"]:
-            if exclude in query_lower:
-                return 0  # 제외 키워드가 있으면 0점
-    
-    # context_require_any 체크
-    if "context_require_any" in faq:
-        if not any(req in query_lower for req in faq["context_require_any"]):
-            return 0  # 필수 키워드가 하나도 없으면 0점
-    
-    # priority 보너스
-    if "priority" in faq:
-        score += faq["priority"] * 0.05
-    
-    # 기본 토큰 매칭
-    q_tokens = tokenize(query)
-    faq_tokens = faq["_tokens"]
-    overlap = len(q_tokens & faq_tokens)
-    
-    if len(q_tokens) > 0:
-        score += overlap / len(q_tokens) * 0.5
-    
-    return min(1.0, score)  # 최대 1.0
-
-
-def retrieve_faq(query, max_faqs=2):
-    """관련 FAQ 검색 - 개선된 버전"""
-    if not FAQS:
-        return []
-    
-    # 각 FAQ의 관련성 점수 계산
-    scored_faqs = []
-    for faq in FAQS:
-        score = calculate_faq_relevance(query, faq)
-        if score > 0:
-            scored_faqs.append((score, faq))
-    
-    # 점수순 정렬
-    scored_faqs.sort(key=lambda x: x[0], reverse=True)
-    
-    # 임계값 이상만 선택
-    results = []
-    seen_categories = set()
-    
-    for score, faq in scored_faqs:
-        if score < config.FAQ_CONFIG["min_threshold"]:
-            break
+def track_visitor(fingerprint):
+    """방문자 추적"""
+    try:
+        # 고유 방문자 체크
+        visitors = set()
+        if os.path.exists(VISITORS_FILE):
+            with open(VISITORS_FILE, 'r') as f:
+                visitors = set(line.strip() for line in f)
         
-        # 카테고리 다양성 보장
-        if faq["category"] not in seen_categories:
-            results.append({
-                "q": faq["q"][:50],
-                "a": faq.get("a_short", faq["a"])[:120],
-                "category": faq["category"],
-                "score": score
-            })
-            seen_categories.add(faq["category"])
+        if fingerprint not in visitors:
+            visitors.add(fingerprint)
+            with open(VISITORS_FILE, 'a') as f:
+                f.write(f"{fingerprint}\n")
             
-            if len(results) >= max_faqs:
-                break
-    
-    return results
+            # 통계 업데이트
+            stats = load_stats()
+            stats["total_visitors"] += 1
+            save_stats(stats)
+            return True
+    except Exception as e:
+        logger.error(f"Visitor tracking error: {e}")
+    return False
 
+# 초기 통계 로드
+site_stats = load_stats()
 
 # 금액 계산 의도 감지 - 개선
 RX_NUM = r"(?:\d{1,3}(?:,\d{3})+|\d+)"
 ASK_AMT = re.compile(
-    r"(얼마|금액|일액|일당|월급|상한|하한|수당|총액|받(?:나요|아|을까요)|나오(?:나요|니|게))"
+    r"(얼마|금액|일액|일당|월급|상한|하한|수당|이액|받(?:나요|아|을까요)|나오(?:나요|니|게))"
 )
 HAS_NUMW = re.compile(rf"{RX_NUM}\s*(원|만원)")
 VERB_CALC = re.compile(r"(계산|산정|얼추|대략)\s*(해|해줘|가능|방법)")
@@ -367,36 +308,59 @@ def save_qa_with_user(question, answer, user_key):
 def should_use_premise(question):
     """'실업급여 조건이 충족된다는 전제 하에' 사용 여부 판단"""
     question_lower = question.lower()
-    
+
     # 사용하지 않는 경우들
     dont_use = [
         # 이미 재취업/근무 중
-        "일하고", "근무하고", "활동하고", "라이더로", "배달하는", "프리랜서로",
-        "다니고", "취직", "재취업", "시작했", "시작한",
+        "일하고",
+        "근무하고",
+        "활동하고",
+        "라이더로",
+        "배달하는",
+        "프리랜서로",
+        "다니고",
+        "취직",
+        "재취업",
+        "시작했",
+        "시작한",
         # 제도 설명 질문
-        "뭐야", "뭐에요", "무엇", "얼마나", "기준", "상한", "하한",
+        "뭐야",
+        "뭐에요",
+        "무엇",
+        "얼마나",
+        "기준",
+        "상한",
+        "하한",
         # 자격 없음이 명확한 경우
-        "3개월", "4개월", "5개월"  # 6개월 미만
+        "3개월",
+        "4개월",
+        "5개월",  # 6개월 미만
     ]
-    
+
     # 사용하는 경우들
     do_use = [
         # 일반적 설명이 필요한 경우
-        "권고사직", "계약만료", "해고",
+        "권고사직",
+        "계약만료",
+        "해고",
         # 가정적 질문
-        "받을 수 있", "가능한가", "되나요",
+        "받을 수 있",
+        "가능한가",
+        "되나요",
         # 과거형 (이미 퇴직)
-        "퇴사했", "그만뒀", "퇴직했"
+        "퇴사했",
+        "그만뒀",
+        "퇴직했",
     ]
-    
+
     # 사용하지 않는 패턴이 있으면 False
     if any(pattern in question_lower for pattern in dont_use):
         return False
-    
+
     # 사용하는 패턴이 있으면 True
     if any(pattern in question_lower for pattern in do_use):
         return True
-    
+
     # 기본값: 사용하지 않음
     return False
 
@@ -427,7 +391,7 @@ def validate_answer(answer, question):
 
 
 def generate_ai_answer(question, calc_data=None):
-    """AI 답변 생성 - 개선된 버전"""
+    """AI 답변 생성 - FAQ 제거 버전"""
     try:
         # 금액 계산 의도 차단
         if detect_amount_intent(question) == "AMOUNT_CALC":
@@ -448,15 +412,12 @@ def generate_ai_answer(question, calc_data=None):
         if "부정수급" in question:
             return config.FALLBACK_ANSWERS["부정수급"]
 
-        # FAQ 검색 - 개선된 버전 사용
-        faqs = retrieve_faq(question)
-
         # 시스템/유저 메시지 구성
         system_prompt = config.SYSTEM_PROMPT.format(current_info=config.CURRENT_INFO)
 
         # "실업급여 조건이 충족된다는 전제" 사용 여부 결정
         use_premise = should_use_premise(question)
-        
+
         user_msg = f"질문: {question}"
 
         # 계산기 데이터 활용
@@ -467,19 +428,14 @@ def generate_ai_answer(question, calc_data=None):
             user_msg += f"\n- 예상 일 급여: {calc_data.get('daily_amount', '미계산')}원"
             user_msg += f"\n- 수급 일수: {calc_data.get('days', '미계산')}일"
 
-        # FAQ 있으면 참고사례로 추가
-        if faqs:
-            case_text = "\n\n[참고 FAQ - 맥락에 맞을 때만 사용하세요]\n"
-            for faq in faqs:
-                case_text += f"- Q: {faq['q']}\n  A: {faq['a']}\n"
-            case_text += "\n이 FAQ는 참고용입니다. 질문의 상황과 정확히 맞을 때만 활용하고, 맞지 않으면 무시하세요."
-            user_msg += case_text
-
         # 전제 사용 지침 추가
         if use_premise:
             user_msg += '\n\n지침: 이 질문은 일반적인 설명이 필요하므로 "실업급여 조건이 충족된다는 전제 하에"로 시작하세요.'
         else:
             user_msg += '\n\n지침: 이 질문은 구체적 상황이므로 "실업급여 조건이 충족된다는 전제 하에"를 사용하지 마세요.'
+
+        # 중요 지침 추가
+        user_msg += "\n\n⚠️ 중요: 계산기 링크나 고용센터 안내를 직접 하지 마세요. URL을 생성하지 마세요. 순수한 답변만 제공하세요."
 
         # 컨텍스트 명확화
         if ("하는데" in question or "인데" in question) and "실업급여" in question:
@@ -490,6 +446,9 @@ def generate_ai_answer(question, calc_data=None):
         # 특정 케이스 강조
         if "임금체불" in question:
             user_msg += "\n\n중요: 임금체불 2개월 이상시 자진퇴사도 실업급여 가능. 이 점을 반드시 언급하세요."
+
+        if "180일" in question or "합산" in question:
+            user_msg += "\n\n중요: 18개월 내 여러 직장 피보험기간은 합산 가능. 연속일 필요 없음."
 
         if "65세" in question or "66세" in question:
             user_msg += "\n\n중요: 65세 이전부터 계속 근무한 경우만 가능. 65세 이후 신규 고용은 제외."
@@ -536,15 +495,7 @@ def generate_ai_answer(question, calc_data=None):
         # 답변 검증
         answer = validate_answer(answer, question)
 
-        # 계산 관련 질문시 링크 추가
-        if any(
-            word in question
-            for word in ["얼마", "금액", "계산", "월급", "하한", "상한"]
-        ):
-            if "sudanghelp.co.kr" not in answer:
-                answer += '\n\n<a href="https://sudanghelp.co.kr/unemployment/" target="_blank" style="background:#0066ff;color:white;padding:8px 16px;border-radius:4px;text-decoration:none;display:inline-block;margin:10px 0">📊 실업급여 계산기 바로가기</a>'
-
-        # 후처리
+        # 후처리 (태그 버튼 추가)
         answer = postprocess_answer(answer)
 
         return answer
@@ -560,29 +511,69 @@ def generate_ai_answer(question, calc_data=None):
 
 
 def postprocess_answer(answer):
-    """답변 후처리"""
+    """답변 후처리 - AI가 생성한 모든 링크 제거 후 통일된 태그 추가"""
     # 마크다운 제거
     answer = (
         answer.replace("**", "").replace("###", "").replace("##", "").replace("#", "")
     )
 
-    # 계산기 URL 변환
+    # AI가 생성한 모든 링크/계산기 안내 제거
+    # 고용노동부 관련 링크 제거
+    answer = re.sub(r"\[.*?\]\(https?://[^\)]+\)", "", answer)  # [텍스트](URL) 형식
+    answer = re.sub(r"https?://www\.moel\.go\.kr[^\s]*", "", answer)  # 직접 URL
     answer = re.sub(
-        r"계산기:\s*(https://sudanghelp\.co\.kr/unemployment/?)",
-        r'<a href="\1" target="_blank" style="background:#0066ff;color:white;padding:8px 16px;border-radius:4px;text-decoration:none;display:inline-block;margin:10px 0">📊 실업급여 계산기 바로가기</a>',
-        answer,
+        r"https?://sudanghelp\.co\.kr[^\s<]*", "", answer  # 우리 사이트 URL도 제거
     )
+    answer = re.sub(r"<a[^>]*>.*?</a>", "", answer, flags=re.DOTALL)  # 기존 a 태그 제거
 
+    # 계산기 관련 문구 제거
     answer = re.sub(
-        r'(?<!href=")(?<!>)(https://sudanghelp\.co\.kr/unemployment/?)(?!</a>)',
-        r'<a href="\1" target="_blank" style="background:#0066ff;color:white;padding:8px 16px;border-radius:4px;text-decoration:none;display:inline-block;margin:10px 0">📊 실업급여 계산기 바로가기</a>',
+        r"(정확한 산정은|정확한 계산은|자세한 계산은|정확한 금액은).*?(계산기|고용센터|1350|확인).*?[\n\.]",
+        "",
         answer,
+        flags=re.DOTALL,
     )
+    answer = re.sub(r"👉.*?(?:확인하세요|바로가기)[\.]?", "", answer)
+    answer = re.sub(r"📊.*?바로가기.*?(?=\n|$)", "", answer)
 
     # 중복 줄바꿈 제거
     answer = re.sub(r"\n{3,}", "\n\n", answer).strip()
 
-    return answer
+    # 통일된 태그 버튼 추가 (답변 끝에)
+    tag_buttons = """
+
+<div class="tag-wrapper" style="overflow-x:auto;white-space:nowrap;padding:15px 0;margin-top:20px;border-top:1px solid #e0e0e0;-webkit-overflow-scrolling:touch;scrollbar-width:none;">
+    <a href="https://sudanghelp.co.kr/unemployment/" target="_blank" style="display:inline-block;padding:8px 20px;margin:0 6px 0 0;background:#f5f5f5;border:1px solid #ddd;border-radius:20px;text-decoration:none;color:#333;font-size:14px;white-space:nowrap;transition:all 0.2s;">실업급여 계산기</a>
+    <a href="https://sudanghelp.co.kr/unemployment-guide-2025/" target="_blank" style="display:inline-block;padding:8px 20px;margin:0 6px;background:#f5f5f5;border:1px solid #ddd;border-radius:20px;text-decoration:none;color:#333;font-size:14px;white-space:nowrap;transition:all 0.2s;">2025 최신 매뉴얼</a>
+    <a href="tel:1350" style="display:inline-block;padding:8px 20px;margin:0 6px;background:#f5f5f5;border:1px solid #ddd;border-radius:20px;text-decoration:none;color:#333;font-size:14px;white-space:nowrap;transition:all 0.2s;">고용센터 1350</a>
+    <a href="https://www.work24.go.kr" target="_blank" style="display:inline-block;padding:8px 20px;margin:0 6px;background:#f5f5f5;border:1px solid #ddd;border-radius:20px;text-decoration:none;color:#333;font-size:14px;white-space:nowrap;transition:all 0.2s;">고용24 바로가기</a>
+</div>"""
+
+    return answer + tag_buttons
+
+
+# 통계 API 추가
+@app.route("/api/stats", methods=["GET"])
+def get_stats():
+    """사이트 통계 조회"""
+    try:
+        stats = load_stats()
+        
+        # 전체 좋아요 수 계산
+        total_likes = sum(counts["like"] for counts in feedback_counts.values())
+        stats["total_likes"] = total_likes
+        
+        return jsonify({
+            "visitors": stats.get("total_visitors", 1500),
+            "total_likes": total_likes,
+            "last_updated": stats.get("last_updated")
+        })
+    except Exception as e:
+        logger.error(f"Stats API error: {e}")
+        return jsonify({
+            "visitors": 1500,
+            "total_likes": 0
+        })
 
 
 # 루트 경로
@@ -599,6 +590,7 @@ def index():
                 "chat": "/api/chat",
                 "feedback": "/api/feedback",
                 "calculator": "/api/mark-calculator-used",
+                "stats": "/api/stats",
                 "test": "/api/test-openrouter",
                 "debug": "/api/debug",
             },
@@ -728,7 +720,14 @@ def feedback():
         if feedback_type == "dislike":
             logger.warning(f"Dislike feedback: {data.get('question')[:100]}")
 
+        # 피드백 카운트 증가
         feedback_counts[answer_hash][feedback_type] += 1
+        
+        # 좋아요일 때 전체 통계 업데이트
+        if feedback_type == "like":
+            stats = load_stats()
+            stats["total_likes"] = stats.get("total_likes", 0) + 1
+            save_stats(stats)
 
         feedback_file = "qa_logs/feedback.csv"
         file_exists = os.path.exists(feedback_file)
@@ -773,14 +772,6 @@ def get_feedback_count(answer_hash):
     )
 
 
-@app.route("/api/reload-faq", methods=["POST"])
-def reload_faq():
-    """FAQ 리로드"""
-    global FAQS
-    FAQS = load_knowledge()
-    return jsonify({"status": "reloaded", "count": len(FAQS)})
-
-
 @app.route("/api/chat", methods=["POST"])
 @limiter.limit("5 per minute")
 @limiter.limit("50 per hour", key_func=get_remote_address)
@@ -789,6 +780,9 @@ def chat():
         question = request.json.get("question", "")
         fingerprint = request.json.get("fingerprint", "")
         calc_data = request.json.get("calcData")
+
+        # 방문자 추적
+        track_visitor(fingerprint)
 
         # 개발자 체크
         is_dev = (
