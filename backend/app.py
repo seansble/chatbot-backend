@@ -372,9 +372,8 @@ def get_user_keys(request, fingerprint):
 
 def is_unemployment_related(question):
     """실업급여 관련 질문인지 체크"""
-    if "실업급여" in question or "실업 급여" in question:
-        return True
-    return any(keyword in question.lower() for keyword in config.UNEMPLOYMENT_KEYWORDS)
+    # 모든 질문 허용 (임시)
+    return True
 
 def check_malicious_input(text):
     """악성 패턴 체크"""
