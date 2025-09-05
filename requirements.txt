@@ -10,13 +10,7 @@ gunicorn==21.2.0
 requests==2.31.0
 rapidfuzz==3.5.1
 
-# RAG 시스템용 - 호환 버전
-langchain==0.2.16
-langchain-community==0.2.17
-langgraph==0.2.0
-langchain-core==0.2.41
+# 가벼운 RAG 필수 패키지만
 qdrant-client==1.15.0
 rank-bm25==0.2.2
 numpy==1.26.4
-pandas==2.0.3
-tiktoken==0.5.2
