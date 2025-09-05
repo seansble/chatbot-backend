@@ -16,7 +16,6 @@ langchain-community==0.2.17
 langgraph==0.2.0
 langchain-core==0.2.41
 qdrant-client==1.15.0
-sentence-transformers==2.2.2
 rank-bm25==0.2.2
 numpy==1.26.4
 pandas==2.0.3
