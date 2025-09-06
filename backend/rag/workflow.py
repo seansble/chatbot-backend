@@ -1,4 +1,4 @@
-"""LangGraph RAG 워크플로우 - 형태소 기반 의문점 추출 및 LLM 평가"""
+"""LangGraph RAG 워크플로우 - LLM 직접 평가"""
 
 from typing import Dict, List, TypedDict, Optional, Any
 from langgraph.graph import StateGraph, END
@@ -18,10 +18,6 @@ class RAGState(TypedDict):
     # 전처리
     processed_query: str
     query_type: str
-
-    # 형태소 분석
-    morpheme_analysis: List[Dict[str, str]]  # 형태소 분석 결과
-    semantic_questions: List[Dict[str, Any]]  # 의문점 리스트
 
     # 검색
     documents: List[Dict]
@@ -48,23 +44,12 @@ class SemanticRAGWorkflow:
         self.retriever = retriever
         self.workflow = self._build_workflow()
 
-        # Kiwipiepy 초기화 (형태소 분석용)
-        try:
-            from kiwipiepy import Kiwi
-
-            self.kiwi = Kiwi()
-            logger.info("✅ Kiwipiepy loaded successfully")
-        except ImportError:
-            logger.warning("Kiwipiepy not available, using fallback")
-            self.kiwi = None
-
     def _build_workflow(self):
         """워크플로우 구성"""
         workflow = StateGraph(RAGState)
 
         # 노드 정의
         workflow.add_node("analyze_query", self.analyze_query)
-        workflow.add_node("morpheme_analysis", self.morpheme_analysis)
         workflow.add_node("rag_search", self.rag_search)
         workflow.add_node("llm_evaluate_coverage", self.llm_evaluate_coverage)
         workflow.add_node("generate_from_rag", self.generate_from_rag)
@@ -74,8 +59,7 @@ class SemanticRAGWorkflow:
 
         # 엣지 정의
         workflow.set_entry_point("analyze_query")
-        workflow.add_edge("analyze_query", "morpheme_analysis")
-        workflow.add_edge("morpheme_analysis", "rag_search")
+        workflow.add_edge("analyze_query", "rag_search")
         workflow.add_edge("rag_search", "llm_evaluate_coverage")
 
         # 평가 후 라우팅
@@ -121,62 +105,6 @@ class SemanticRAGWorkflow:
         logger.info(f"Query processed: {processed[:50]}...")
         return state
 
-    def morpheme_analysis(self, state: RAGState) -> RAGState:
-        """형태소 분석 - Kiwipiepy 결과를 그대로 전달"""
-        state["debug_path"].append("morpheme_analysis")
-        query = state["processed_query"]
-
-        if self.kiwi:
-            # Kiwipiepy로 형태소 분석
-            try:
-                tokens = self.kiwi.tokenize(query)
-                morpheme_analysis = []
-
-                for token in tokens:
-                    morpheme_analysis.append(
-                        {
-                            "형태": token.form,
-                            "품사": token.tag,
-                            "시작": token.start,
-                            "길이": token.len,
-                        }
-                    )
-
-                state["morpheme_analysis"] = morpheme_analysis
-
-                # 의문점 힌트 추출 (LLM 평가를 돕기 위한 정보)
-                semantic_hints = []
-                for i, token in enumerate(tokens):
-                    if token.form in ["얼마", "얼마나", "몇"]:
-                        semantic_hints.append("수량/비율 정보 필요")
-                    elif token.form in ["언제", "며칠", "기간"]:
-                        semantic_hints.append("시간/기간 정보 필요")
-                    elif token.tag == "EC" and "면" in token.form:
-                        semantic_hints.append("조건과 결과 정보 필요")
-                    elif (
-                        token.form == "수"
-                        and i + 1 < len(tokens)
-                        and tokens[i + 1].form in ["있", "없"]
-                    ):
-                        semantic_hints.append("가능/불가능 여부 필요")
-
-                state["semantic_questions"] = list(set(semantic_hints))  # 중복 제거
-
-                logger.info(
-                    f"Morpheme analysis complete: {len(morpheme_analysis)} tokens"
-                )
-
-            except Exception as e:
-                logger.error(f"Morpheme analysis failed: {e}")
-                state["morpheme_analysis"] = []
-                state["semantic_questions"] = ["일반 정보"]
-        else:
-            # Fallback: 간단한 분석
-            state["morpheme_analysis"] = []
-            state["semantic_questions"] = ["관련 정보"]
-
-        return state
-
     def rag_search(self, state: RAGState) -> RAGState:
         """RAG 검색"""
         state["debug_path"].append("rag_search")
@@ -205,39 +133,23 @@ class SemanticRAGWorkflow:
                 api_key=config.OPENROUTER_API_KEY,
             )
 
-            # 형태소 분석 결과를 JSON으로
-            morpheme_text = json.dumps(
-                state["morpheme_analysis"], ensure_ascii=False, indent=2
-            )
-
-            # 의문점 힌트
-            hints_text = "\n".join(
-                [f"- {hint}" for hint in state.get("semantic_questions", [])]
-            )
-
             prompt = f"""질문: {state['query']}
-
-형태소 분석 결과:
-{morpheme_text}
-
-추출된 의문점:
-{hints_text if hints_text else "일반 정보 요청"}
 
 RAG 검색 결과:
 {state['context']}
 
-위 형태소 분석을 바탕으로 평가해주세요:
-1. 명사(NNG): 핵심 주제들이 RAG 결과에 있는가?
-2. 숫자(SN)+단위(NNB): 수량 정보가 제공되었는가?
-3. 부사(MAG): 의문사에 대한 답변이 있는가?
-4. 조건(EC '면'): 조건과 그 결과가 설명되었는가?
+이 검색 결과가 질문의 모든 요소에 답변하는지 평가하세요.
+확인 사항:
+- 질문에서 요구하는 모든 정보가 포함되었는가?
+- 숫자, 비율, 기간 등 구체적 정보가 필요한 경우 제공되었는가?
+- 조건이나 가능 여부를 묻는 경우 명확히 답변되었는가?
 
 JSON 형식으로 답변:
 {{
   "coverage_score": 0.0~1.0,
-  "covered_elements": ["실업급여", "3회", "감액"],
-  "missing_elements": ["신청 시기"],
-  "evaluation": "간단한 평가 설명"
+  "covered_elements": ["답변된 요소들"],
+  "missing_elements": ["빠진 요소들"],
+  "evaluation": "평가 설명"
 }}"""
 
             completion = client.chat.completions.create(
@@ -380,19 +292,7 @@ JSON 형식으로 답변:
                 api_key=config.OPENROUTER_API_KEY,
             )
 
-            # 형태소 정보 활용
-            morpheme_info = ""
-            if state.get("morpheme_analysis"):
-                key_nouns = [
-                    m["형태"] for m in state["morpheme_analysis"] if m["품사"] == "NNG"
-                ]
-                key_numbers = [
-                    m["형태"] for m in state["morpheme_analysis"] if m["품사"] == "SN"
-                ]
-                morpheme_info = f"\n핵심 명사: {', '.join(key_nouns)}\n숫자: {', '.join(key_numbers)}"
-
             prompt = f"""질문: {state['query']}
-{morpheme_info}
 
 참고 정보:
 {state['context']}
@@ -453,8 +353,6 @@ JSON 형식으로 답변:
             "query": query,
             "processed_query": "",
             "query_type": "",
-            "morpheme_analysis": [],
-            "semantic_questions": [],
             "documents": [],
             "relevance_score": 0.0,
             "context": "",
@@ -477,7 +375,6 @@ JSON 형식으로 답변:
             "coverage": result.get("coverage_score", 0.0),
             "debug": {
                 "path": result.get("debug_path", []),
-                "morpheme_analysis": result.get("morpheme_analysis", []),
                 "coverage_details": result.get("coverage_details", {}),
                 "missing_parts": result.get("missing_parts", []),
             },

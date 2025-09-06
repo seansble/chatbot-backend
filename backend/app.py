@@ -27,7 +27,7 @@ import sys
 
 sys.path.append("backend")
 from rag.retriever import RAGRetriever
-from rag.workflow import RAGWorkflow
+from rag.workflow import SemanticRAGWorkflow as RAGWorkflow
 
 # 필요한 폴더들 생성
 for folder in ["logs", "qa_logs", "data", "stats", "backend/rag", "cache"]:
