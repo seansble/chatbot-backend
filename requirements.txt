@@ -13,5 +13,5 @@ langgraph==0.2.0
 sentence-transformers==2.2.2
 torch==2.4.0  # 2.0.1 → 2.4.0으로 변경
 transformers==4.35.0
-kiwipiepy==0.14.1
 tqdm==4.66.1
+# kiwipiepy==0.14.1  # 일단 주석처리
