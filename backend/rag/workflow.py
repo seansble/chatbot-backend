@@ -1,4 +1,4 @@
-"""LangGraph RAG 워크플로우 - LLM 직접 평가"""
+﻿"""LangGraph RAG 워크플로우 - LLM 직접 평가"""
 
 from typing import Dict, List, TypedDict, Optional, Any
 from langgraph.graph import StateGraph, END
@@ -70,8 +70,7 @@ class SemanticRAGWorkflow:
                 "complete": "generate_from_rag",
                 "partial": "enhance_missing",
                 "insufficient": "regenerate_full",
-            },
-        )
+            })
 
         workflow.add_edge("generate_from_rag", "format_final")
         workflow.add_edge("enhance_missing", "format_final")
@@ -130,8 +129,7 @@ class SemanticRAGWorkflow:
 
             client = OpenAI(
                 base_url="https://api.together.xyz/v1",
-                api_key=config.OPENROUTER_API_KEY,
-            )
+                api_key=config.OPENROUTER_API_KEY)
 
             prompt = f"""질문: {state['query']}
 
@@ -156,8 +154,7 @@ JSON 형식으로 답변:
                 model=config.EVAL_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=300,
-            )
+                max_tokens=300)
 
             # JSON 파싱
             try:
@@ -219,8 +216,7 @@ JSON 형식으로 답변:
 
             client = OpenAI(
                 base_url="https://api.together.xyz/v1",
-                api_key=config.OPENROUTER_API_KEY,
-            )
+                api_key=config.OPENROUTER_API_KEY)
 
             # 질문과 컨텍스트를 명확히 구분
             prompt = f"""다음은 실업급여 관련 정보입니다. 사용자의 질문에 대해서만 답변하세요.
@@ -244,8 +240,7 @@ JSON 형식으로 답변:
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.3,
-                max_tokens=500,
-            )
+                max_tokens=500)
 
             state["raw_answer"] = completion.choices[0].message.content
             state["answer_method"] = "rag_complete"
@@ -286,8 +281,7 @@ JSON 형식으로 답변:
 
             client = OpenAI(
                 base_url="https://api.together.xyz/v1",
-                api_key=config.OPENROUTER_API_KEY,
-            )
+                api_key=config.OPENROUTER_API_KEY)
 
             missing_text = ", ".join(missing_parts)
 
@@ -305,8 +299,7 @@ JSON 형식으로 답변:
                 model=config.MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.5,
-                max_tokens=600,
-            )
+                max_tokens=600)
 
             state["raw_answer"] = completion.choices[0].message.content
             state["answer_method"] = "enhanced"
@@ -328,8 +321,7 @@ JSON 형식으로 답변:
 
             client = OpenAI(
                 base_url="https://api.together.xyz/v1",
-                api_key=config.OPENROUTER_API_KEY,
-            )
+                api_key=config.OPENROUTER_API_KEY)
 
             prompt = f"""질문: {state['query']}
 
@@ -344,8 +336,7 @@ JSON 형식으로 답변:
                 model=config.MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.5,
-                max_tokens=800,
-            )
+                max_tokens=800)
 
             state["raw_answer"] = completion.choices[0].message.content
             state["answer_method"] = "regenerated"
@@ -469,3 +460,4 @@ JSON 형식으로 답변:
 # 기존 클래스 대체
 RAGWorkflow = SemanticRAGWorkflow
 ImprovedRAGWorkflow = SemanticRAGWorkflow
+
