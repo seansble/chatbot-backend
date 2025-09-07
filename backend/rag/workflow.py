@@ -70,7 +70,8 @@ class SemanticRAGWorkflow:
                 "complete": "generate_from_rag",
                 "partial": "enhance_missing",
                 "insufficient": "regenerate_full",
-            })
+            },
+        )
 
         workflow.add_edge("generate_from_rag", "format_final")
         workflow.add_edge("enhance_missing", "format_final")
@@ -120,7 +121,7 @@ class SemanticRAGWorkflow:
         return state
 
     def llm_evaluate_coverage(self, state: RAGState) -> RAGState:
-        """LLM을 사용한 충족도 평가"""
+        """LLM을 사용한 충족도 평가 - 개선된 프롬프트"""
         state["debug_path"].append("llm_evaluate")
 
         try:
@@ -129,32 +130,34 @@ class SemanticRAGWorkflow:
 
             client = OpenAI(
                 base_url="https://api.together.xyz/v1",
-                api_key=config.OPENROUTER_API_KEY)
+                api_key=config.OPENROUTER_API_KEY,
+            )
 
-            prompt = f"""질문: {state['query']}
+            # 더 명확한 평가 프롬프트
+            prompt = f"""사용자 질문: {state['query']}
+RAG 문서: {state['context']}
 
-RAG 검색 결과:
-{state['context']}
+작업: 질문에서 요구하는 정보가 RAG 문서에 있는지 평가
 
-이 검색 결과가 질문의 모든 요소에 답변하는지 평가하세요.
-확인 사항:
-- 질문에서 요구하는 모든 정보가 포함되었는가?
-- 숫자, 비율, 기간 등 구체적 정보가 필요한 경우 제공되었는가?
-- 조건이나 가능 여부를 묻는 경우 명확히 답변되었는가?
+평가 방법:
+1. 사용자가 명시적으로 질문한 내용만 확인
+2. RAG 문서에 해당 정보가 있는지 체크
+3. 질문하지 않은 내용은 평가하지 않음
 
-JSON 형식으로 답변:
+JSON 응답:
 {{
-  "coverage_score": 0.0~1.0,
-  "covered_elements": ["답변된 요소들"],
-  "missing_elements": ["빠진 요소들"],
-  "evaluation": "평가 설명"
+  "coverage_score": 0.0-1.0,
+  "found_elements": ["RAG에서 찾은 정보"],
+  "missing_elements": ["질문했지만 RAG에 없는 정보"],
+  "evaluation": "간단한 설명"
 }}"""
 
             completion = client.chat.completions.create(
                 model=config.EVAL_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=300)
+                max_tokens=300,
+            )
 
             # JSON 파싱
             try:
@@ -171,7 +174,7 @@ JSON 형식으로 답변:
                 logger.warning(f"JSON parsing error: {json_error}")
                 evaluation = {
                     "coverage_score": 0.7,
-                    "covered_elements": [],
+                    "found_elements": [],
                     "missing_elements": [],
                     "evaluation": "JSON 파싱 실패, 기본값 사용",
                 }
@@ -196,12 +199,12 @@ JSON 형식으로 답변:
         return state
 
     def route_by_coverage(self, state: RAGState) -> str:
-        """충족도에 따른 라우팅"""
+        """충족도에 따른 라우팅 - threshold 조정"""
         score = state["coverage_score"]
 
-        if score >= 0.9:
+        if score >= 0.7:  # 0.9 → 0.7로 낮춤 (RAG 더 신뢰)
             return "complete"
-        elif score >= 0.5:
+        elif score >= 0.4:  # 0.5 → 0.4로 낮춤
             return "partial"
         else:
             return "insufficient"
@@ -216,7 +219,8 @@ JSON 형식으로 답변:
 
             client = OpenAI(
                 base_url="https://api.together.xyz/v1",
-                api_key=config.OPENROUTER_API_KEY)
+                api_key=config.OPENROUTER_API_KEY,
+            )
 
             # 질문과 컨텍스트를 명확히 구분
             prompt = f"""다음은 실업급여 관련 정보입니다. 사용자의 질문에 대해서만 답변하세요.
@@ -240,7 +244,8 @@ JSON 형식으로 답변:
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.3,
-                max_tokens=500)
+                max_tokens=500,
+            )
 
             state["raw_answer"] = completion.choices[0].message.content
             state["answer_method"] = "rag_complete"
@@ -266,7 +271,7 @@ JSON 형식으로 답변:
         return state
 
     def enhance_missing(self, state: RAGState) -> RAGState:
-        """빠진 부분만 보강"""
+        """빠진 부분만 보강 - 개선된 프롬프트"""
         state["debug_path"].append("enhance_missing")
 
         missing_parts = state.get("missing_parts", [])
@@ -281,25 +286,40 @@ JSON 형식으로 답변:
 
             client = OpenAI(
                 base_url="https://api.together.xyz/v1",
-                api_key=config.OPENROUTER_API_KEY)
+                api_key=config.OPENROUTER_API_KEY,
+            )
 
             missing_text = ", ".join(missing_parts)
 
-            prompt = f"""질문: {state['query']}
+            # Qwen3와 동일한 톤 유지하면서 RAG 우선
+            prompt = f"""사용자 질문: {state['query']}
 
-현재 답변:
+RAG 검색 결과 (2025년 최신):
 {state['context']}
 
-다음 정보가 부족합니다: {missing_text}
+RAG에서 찾지 못한 정보: {missing_text}
 
-부족한 정보를 추가하여 완전한 답변을 작성하세요.
-실업급여 관련 최신 정책을 반영하여 답변하세요."""
+작업 지시:
+1. RAG 검색 결과를 기본으로 사용 (정보 충돌시 RAG 우선)
+2. {missing_text}에 대한 정보만 추가로 보충
+3. 친근하고 이해하기 쉽게 설명
+4. 💼, 🎂 같은 이모지 적절히 사용
+5. 최종 답변은 800자 이내
+
+답변:"""
 
             completion = client.chat.completions.create(
                 model=config.MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.5,
-                max_tokens=600)
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "당신은 실업급여 전문 상담사입니다. 친근하고 정확하게 답변하세요.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.3,  # 일관성을 위해 낮게
+                max_tokens=1000,
+            )  # 충분한 토큰 확보
 
             state["raw_answer"] = completion.choices[0].message.content
             state["answer_method"] = "enhanced"
@@ -321,22 +341,31 @@ JSON 형식으로 답변:
 
             client = OpenAI(
                 base_url="https://api.together.xyz/v1",
-                api_key=config.OPENROUTER_API_KEY)
+                api_key=config.OPENROUTER_API_KEY,
+            )
 
             prompt = f"""질문: {state['query']}
 
-참고 정보:
+참고 정보 (2025년 기준):
 {state['context']}
 
 위 질문에 대해 완전하고 정확한 답변을 생성하세요.
+참고 정보가 있다면 우선 활용하고, 부족한 부분은 보충하세요.
 2025년 최신 실업급여 정책을 반영하여 답변하세요.
 숫자, 기간, 조건 등 구체적인 정보를 포함하세요."""
 
             completion = client.chat.completions.create(
                 model=config.MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.5,
-                max_tokens=800)
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "당신은 실업급여 전문 상담사입니다. 정확하고 최신 정보로 답변하세요.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.3,
+                max_tokens=1000,
+            )
 
             state["raw_answer"] = completion.choices[0].message.content
             state["answer_method"] = "regenerated"
@@ -369,6 +398,11 @@ JSON 형식으로 답변:
             answer += debug_info
 
         state["final_answer"] = answer
+
+        # coverage_score가 0으로 리셋되는 버그 수정
+        if state.get("coverage_score") == 0 and state.get("answer_method") != "error":
+            logger.warning("Coverage score was 0, using confidence instead")
+            state["coverage_score"] = state.get("confidence", 0.5)
 
         logger.info(f"Workflow complete: {' → '.join(state['debug_path'])}")
         return state
@@ -460,4 +494,3 @@ JSON 형식으로 답변:
 # 기존 클래스 대체
 RAGWorkflow = SemanticRAGWorkflow
 ImprovedRAGWorkflow = SemanticRAGWorkflow
-
