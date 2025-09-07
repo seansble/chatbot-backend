@@ -121,7 +121,7 @@ class SemanticRAGWorkflow:
         return state
 
     def llm_evaluate_coverage(self, state: RAGState) -> RAGState:
-        """LLM을 사용한 충족도 평가 - 개선된 프롬프트"""
+        """LLM을 사용한 의도 파악만 - 간소화"""
         state["debug_path"].append("llm_evaluate")
 
         try:
@@ -133,84 +133,46 @@ class SemanticRAGWorkflow:
                 api_key=config.OPENROUTER_API_KEY,
             )
 
-            # 더 명확한 평가 프롬프트
-            prompt = f"""사용자 질문: {state['query']}
-RAG 문서: {state['context']}
+            # 의도 파악만 하는 간단한 프롬프트
+            prompt = f"""질문: {state['query']}
 
-작업: 질문에서 요구하는 정보가 RAG 문서에 있는지 평가
+이 질문의 핵심 의도를 한 줄로 파악하세요.
+예: "금액 계산 요청" / "자격 조건 확인" / "절차 문의" / "복합 질문"
 
-평가 방법:
-1. 사용자가 명시적으로 질문한 내용만 확인
-2. RAG 문서에 해당 정보가 있는지 체크
-3. 질문하지 않은 내용은 평가하지 않음
-
-JSON 응답:
-{{
-  "coverage_score": 0.0-1.0,
-  "found_elements": ["RAG에서 찾은 정보"],
-  "missing_elements": ["질문했지만 RAG에 없는 정보"],
-  "evaluation": "간단한 설명"
-}}"""
+답 (한 줄만):"""
 
             completion = client.chat.completions.create(
                 model=config.EVAL_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=300,
+                max_tokens=50,
             )
 
-            # JSON 파싱
-            try:
-                response_text = completion.choices[0].message.content
-                json_start = response_text.find("{")
-                json_end = response_text.rfind("}") + 1
-                if json_start >= 0 and json_end > json_start:
-                    json_text = response_text[json_start:json_end]
-                    evaluation = json.loads(json_text)
-                else:
-                    raise ValueError("No JSON found in response")
+            intent = completion.choices[0].message.content.strip()
+            state["coverage_details"] = {"intent": intent}
 
-            except Exception as json_error:
-                logger.warning(f"JSON parsing error: {json_error}")
-                evaluation = {
-                    "coverage_score": 0.7,
-                    "found_elements": [],
-                    "missing_elements": [],
-                    "evaluation": "JSON 파싱 실패, 기본값 사용",
-                }
+            # 항상 0.5 점수로 enhance_missing으로 보내기
+            state["coverage_score"] = 0.5
+            state["missing_parts"] = []
 
-            state["coverage_score"] = evaluation.get("coverage_score", 0.5)
-            state["coverage_details"] = evaluation
-            state["missing_parts"] = evaluation.get("missing_elements", [])
-
-            logger.info(
-                f"LLM Coverage: {state['coverage_score']:.2f}, Missing: {state['missing_parts']}"
-            )
+            logger.info(f"Query intent: {intent}")
 
         except Exception as e:
-            logger.error(f"LLM evaluation failed with error type: {type(e).__name__}")
-            logger.error(f"Error message: {str(e)}")
-
-            # Fallback: 간단한 규칙 기반 평가
-            state["coverage_score"] = 0.7 if state["relevance_score"] > 0.5 else 0.3
-            state["coverage_details"] = {"evaluation": "LLM 평가 실패, 기본값 사용"}
+            logger.error(f"Intent analysis failed: {str(e)}")
+            # 에러시에도 0.5로 설정
+            state["coverage_score"] = 0.5
+            state["coverage_details"] = {"intent": "unknown"}
             state["missing_parts"] = []
 
         return state
 
     def route_by_coverage(self, state: RAGState) -> str:
-        """충족도에 따른 라우팅 - threshold 조정"""
-        score = state["coverage_score"]
-
-        if score >= 0.7:  # 0.9 → 0.7로 낮춤 (RAG 더 신뢰)
-            return "complete"
-        elif score >= 0.4:  # 0.5 → 0.4로 낮춤
-            return "partial"
-        else:
-            return "insufficient"
+        """항상 enhance_missing으로 라우팅"""
+        # 무조건 partial로 반환하여 enhance_missing으로 보내기
+        return "partial"
 
     def generate_from_rag(self, state: RAGState) -> RAGState:
-        """RAG 결과로 답변 생성"""
+        """RAG 결과로 답변 생성 - 사실상 사용 안 함"""
         state["debug_path"].append("generate_from_rag")
 
         try:
@@ -222,7 +184,6 @@ JSON 응답:
                 api_key=config.OPENROUTER_API_KEY,
             )
 
-            # 질문과 컨텍스트를 명확히 구분
             prompt = f"""다음은 실업급여 관련 정보입니다. 사용자의 질문에 대해서만 답변하세요.
 
 사용자 질문: {state['query']}
@@ -254,7 +215,6 @@ JSON 응답:
         except Exception as e:
             logger.error(f"Generation failed with error: {str(e)}")
 
-            # 폴백: 질문과 가장 관련된 답변만 추출
             if state.get("documents") and len(state["documents"]) > 0:
                 answer = self._extract_relevant_answer(
                     state["query"], state["documents"]
@@ -271,14 +231,8 @@ JSON 응답:
         return state
 
     def enhance_missing(self, state: RAGState) -> RAGState:
-        """빠진 부분만 보강 - 개선된 프롬프트"""
+        """Qwen3가 RAG 기반으로 답변 생성 - 항상 실행됨"""
         state["debug_path"].append("enhance_missing")
-
-        missing_parts = state.get("missing_parts", [])
-
-        if not missing_parts:
-            # 빠진 게 없으면 RAG 그대로 사용
-            return self.generate_from_rag(state)
 
         try:
             from openai import OpenAI
@@ -289,22 +243,23 @@ JSON 응답:
                 api_key=config.OPENROUTER_API_KEY,
             )
 
-            missing_text = ", ".join(missing_parts)
-
-            # Qwen3와 동일한 톤 유지하면서 RAG 우선
+            # RAG 우선 원칙을 명확히 한 프롬프트
             prompt = f"""사용자 질문: {state['query']}
 
-RAG 검색 결과 (2025년 최신):
+RAG 검색 결과 (2025년 최신 정보):
 {state['context']}
 
-RAG에서 찾지 못한 정보: {missing_text}
+답변 생성 규칙:
+1. **절대 규칙: RAG와 충돌하는 정보는 무조건 RAG가 정답**
+2. RAG에 있는 숫자, 날짜, 조건은 그대로 사용
+3. RAG에 없는 부분만 보충 (일반 상식 수준)
+4. 300자 이내로 간결하게
+5. 이모지 1-2개만 사용
+6. 친근하고 이해하기 쉽게 설명
 
-작업 지시:
-1. RAG 검색 결과를 기본으로 사용 (정보 충돌시 RAG 우선)
-2. {missing_text}에 대한 정보만 추가로 보충
-3. 친근하고 이해하기 쉽게 설명
-4. 💼, 🎂 같은 이모지 적절히 사용
-5. 최종 답변은 800자 이내
+예시:
+- RAG: "180일 이상" → 이것만 사용 (다른 숫자 금지)
+- RAG: "2025년 기준" → 이것만 사용 (2024년 정보 금지)
 
 답변:"""
 
@@ -313,26 +268,39 @@ RAG에서 찾지 못한 정보: {missing_text}
                 messages=[
                     {
                         "role": "system",
-                        "content": "당신은 실업급여 전문 상담사입니다. 친근하고 정확하게 답변하세요.",
+                        "content": """당신은 실업급여 전문 상담사입니다.
+중요: 제공된 RAG 정보와 다른 내용을 절대 생성하지 마세요.
+RAG에 있는 숫자, 조건, 날짜는 변경 불가입니다.
+친근하고 정확하게 답변하세요.""",
                     },
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.3,  # 일관성을 위해 낮게
-                max_tokens=1000,
-            )  # 충분한 토큰 확보
+                temperature=0.3,
+                max_tokens=600,  # 300자 제한에 맞춰 축소
+            )
 
             state["raw_answer"] = completion.choices[0].message.content
             state["answer_method"] = "enhanced"
-            state["confidence"] = 0.8
+            state["confidence"] = 0.85
 
         except Exception as e:
             logger.error(f"Enhancement failed: {e}")
-            return self.generate_from_rag(state)
+            # 에러시 폴백
+            if state.get("documents"):
+                answer = self._extract_relevant_answer(
+                    state["query"], state["documents"]
+                )
+                state["raw_answer"] = answer
+            else:
+                state["raw_answer"] = "죄송합니다. 답변 생성 중 오류가 발생했습니다."
+
+            state["answer_method"] = "error"
+            state["confidence"] = 0.0
 
         return state
 
     def regenerate_full(self, state: RAGState) -> RAGState:
-        """전체 재생성 (RAG 불충분)"""
+        """전체 재생성 - 사실상 사용 안 함"""
         state["debug_path"].append("regenerate_full")
 
         try:
@@ -373,7 +341,6 @@ RAG에서 찾지 못한 정보: {missing_text}
 
         except Exception as e:
             logger.error(f"Regeneration failed: {e}")
-            # 폴백 답변
             if state.get("documents"):
                 answer = self._extract_relevant_answer(
                     state["query"], state["documents"]
