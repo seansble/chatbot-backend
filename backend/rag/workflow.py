@@ -5,7 +5,6 @@ from langgraph.graph import StateGraph, END
 import logging
 import re
 import json
-import requests
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +70,7 @@ class SemanticRAGWorkflow:
                 "complete": "generate_from_rag",
                 "partial": "enhance_missing",
                 "insufficient": "regenerate_full",
-            },
-        )
+            })
 
         workflow.add_edge("generate_from_rag", "format_final")
         workflow.add_edge("enhance_missing", "format_final")
@@ -122,17 +120,16 @@ class SemanticRAGWorkflow:
         return state
 
     def llm_evaluate_coverage(self, state: RAGState) -> RAGState:
-        """LLM을 사용한 충족도 평가 - requests 직접 사용"""
+        """LLM을 사용한 충족도 평가"""
         state["debug_path"].append("llm_evaluate")
 
         try:
+            from openai import OpenAI
             import config
 
-            url = "https://api.together.xyz/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {config.OPENROUTER_API_KEY}",
-                "Content-Type": "application/json",
-            }
+            client = OpenAI(
+                base_url="https://api.together.xyz/v1",
+                api_key=config.OPENROUTER_API_KEY)
 
             prompt = f"""질문: {state['query']}
 
@@ -147,59 +144,50 @@ RAG 검색 결과:
 
 JSON 형식으로 답변:
 {{
- "coverage_score": 0.0~1.0,
- "covered_elements": ["답변된 요소들"],
- "missing_elements": ["빠진 요소들"],
- "evaluation": "평가 설명"
+  "coverage_score": 0.0~1.0,
+  "covered_elements": ["답변된 요소들"],
+  "missing_elements": ["빠진 요소들"],
+  "evaluation": "평가 설명"
 }}"""
 
-            payload = {
-                "model": str(config.EVAL_MODEL),
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.1,
-                "max_tokens": 300,
-            }
+            completion = client.chat.completions.create(
+                model=config.EVAL_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=300)
 
-            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            # JSON 파싱
+            try:
+                response_text = completion.choices[0].message.content
+                json_start = response_text.find("{")
+                json_end = response_text.rfind("}") + 1
+                if json_start >= 0 and json_end > json_start:
+                    json_text = response_text[json_start:json_end]
+                    evaluation = json.loads(json_text)
+                else:
+                    raise ValueError("No JSON found in response")
 
-            if response.status_code == 200:
-                result = response.json()
-                response_text = result["choices"][0]["message"]["content"]
+            except Exception as json_error:
+                logger.warning(f"JSON parsing error: {json_error}")
+                evaluation = {
+                    "coverage_score": 0.7,
+                    "covered_elements": [],
+                    "missing_elements": [],
+                    "evaluation": "JSON 파싱 실패, 기본값 사용",
+                }
 
-                # JSON 파싱
-                try:
-                    json_start = response_text.find("{")
-                    json_end = response_text.rfind("}") + 1
-                    if json_start >= 0 and json_end > json_start:
-                        json_text = response_text[json_start:json_end]
-                        evaluation = json.loads(json_text)
-                    else:
-                        raise ValueError("No JSON found in response")
+            state["coverage_score"] = evaluation.get("coverage_score", 0.5)
+            state["coverage_details"] = evaluation
+            state["missing_parts"] = evaluation.get("missing_elements", [])
 
-                except Exception as json_error:
-                    logger.warning(f"JSON parsing error: {json_error}")
-                    evaluation = {
-                        "coverage_score": 0.7,
-                        "covered_elements": [],
-                        "missing_elements": [],
-                        "evaluation": "JSON 파싱 실패, 기본값 사용",
-                    }
-
-                state["coverage_score"] = evaluation.get("coverage_score", 0.5)
-                state["coverage_details"] = evaluation
-                state["missing_parts"] = evaluation.get("missing_elements", [])
-
-                logger.info(
-                    f"LLM Coverage: {state['coverage_score']:.2f}, Missing: {state['missing_parts']}"
-                )
-            else:
-                logger.error(f"API error: {response.status_code} - {response.text}")
-                state["coverage_score"] = 0.7
-                state["coverage_details"] = {"evaluation": "API 호출 실패"}
-                state["missing_parts"] = []
+            logger.info(
+                f"LLM Coverage: {state['coverage_score']:.2f}, Missing: {state['missing_parts']}"
+            )
 
         except Exception as e:
-            logger.error(f"LLM evaluation failed: {e}")
+            logger.error(f"LLM evaluation failed with error type: {type(e).__name__}")
+            logger.error(f"Error message: {str(e)}")
+
             # Fallback: 간단한 규칙 기반 평가
             state["coverage_score"] = 0.7 if state["relevance_score"] > 0.5 else 0.3
             state["coverage_details"] = {"evaluation": "LLM 평가 실패, 기본값 사용"}
@@ -219,17 +207,16 @@ JSON 형식으로 답변:
             return "insufficient"
 
     def generate_from_rag(self, state: RAGState) -> RAGState:
-        """RAG 결과로 답변 생성 - requests 직접 사용"""
+        """RAG 결과로 답변 생성"""
         state["debug_path"].append("generate_from_rag")
 
         try:
+            from openai import OpenAI
             import config
 
-            url = "https://api.together.xyz/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {config.OPENROUTER_API_KEY}",
-                "Content-Type": "application/json",
-            }
+            client = OpenAI(
+                base_url="https://api.together.xyz/v1",
+                api_key=config.OPENROUTER_API_KEY)
 
             # 질문과 컨텍스트를 명확히 구분
             prompt = f"""다음은 실업급여 관련 정보입니다. 사용자의 질문에 대해서만 답변하세요.
@@ -243,32 +230,24 @@ JSON 형식으로 답변:
 다른 질문이나 예시는 절대 포함하지 마세요.
 간결하고 명확하게 답변하세요."""
 
-            payload = {
-                "model": str(config.EVAL_MODEL),
-                "messages": [
+            completion = client.chat.completions.create(
+                model=config.EVAL_MODEL,
+                messages=[
                     {
                         "role": "system",
                         "content": "실업급여 전문 상담사입니다. 질문에 대한 답변만 간결하게 제공하세요.",
                     },
                     {"role": "user", "content": prompt},
                 ],
-                "temperature": 0.3,
-                "max_tokens": 500,
-            }
+                temperature=0.3,
+                max_tokens=500)
 
-            response = requests.post(url, headers=headers, json=payload, timeout=30)
-
-            if response.status_code == 200:
-                result = response.json()
-                state["raw_answer"] = result["choices"][0]["message"]["content"]
-                state["answer_method"] = "rag_complete"
-                state["confidence"] = 0.9
-            else:
-                logger.error(f"Generation API error: {response.status_code}")
-                raise Exception(f"API call failed: {response.status_code}")
+            state["raw_answer"] = completion.choices[0].message.content
+            state["answer_method"] = "rag_complete"
+            state["confidence"] = 0.9
 
         except Exception as e:
-            logger.error(f"Generation failed: {str(e)}")
+            logger.error(f"Generation failed with error: {str(e)}")
 
             # 폴백: 질문과 가장 관련된 답변만 추출
             if state.get("documents") and len(state["documents"]) > 0:
@@ -287,7 +266,7 @@ JSON 형식으로 답변:
         return state
 
     def enhance_missing(self, state: RAGState) -> RAGState:
-        """빠진 부분만 보강 - requests 직접 사용"""
+        """빠진 부분만 보강"""
         state["debug_path"].append("enhance_missing")
 
         missing_parts = state.get("missing_parts", [])
@@ -297,13 +276,12 @@ JSON 형식으로 답변:
             return self.generate_from_rag(state)
 
         try:
+            from openai import OpenAI
             import config
 
-            url = "https://api.together.xyz/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {config.OPENROUTER_API_KEY}",
-                "Content-Type": "application/json",
-            }
+            client = OpenAI(
+                base_url="https://api.together.xyz/v1",
+                api_key=config.OPENROUTER_API_KEY)
 
             missing_text = ", ".join(missing_parts)
 
@@ -317,23 +295,15 @@ JSON 형식으로 답변:
 부족한 정보를 추가하여 완전한 답변을 작성하세요.
 실업급여 관련 최신 정책을 반영하여 답변하세요."""
 
-            payload = {
-                "model": str(config.MODEL),
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.5,
-                "max_tokens": 600,
-            }
+            completion = client.chat.completions.create(
+                model=config.MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.5,
+                max_tokens=600)
 
-            response = requests.post(url, headers=headers, json=payload, timeout=30)
-
-            if response.status_code == 200:
-                result = response.json()
-                state["raw_answer"] = result["choices"][0]["message"]["content"]
-                state["answer_method"] = "enhanced"
-                state["confidence"] = 0.8
-            else:
-                logger.error(f"Enhancement API error: {response.status_code}")
-                return self.generate_from_rag(state)
+            state["raw_answer"] = completion.choices[0].message.content
+            state["answer_method"] = "enhanced"
+            state["confidence"] = 0.8
 
         except Exception as e:
             logger.error(f"Enhancement failed: {e}")
@@ -342,17 +312,16 @@ JSON 형식으로 답변:
         return state
 
     def regenerate_full(self, state: RAGState) -> RAGState:
-        """전체 재생성 (RAG 불충분) - requests 직접 사용"""
+        """전체 재생성 (RAG 불충분)"""
         state["debug_path"].append("regenerate_full")
 
         try:
+            from openai import OpenAI
             import config
 
-            url = "https://api.together.xyz/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {config.OPENROUTER_API_KEY}",
-                "Content-Type": "application/json",
-            }
+            client = OpenAI(
+                base_url="https://api.together.xyz/v1",
+                api_key=config.OPENROUTER_API_KEY)
 
             prompt = f"""질문: {state['query']}
 
@@ -363,23 +332,15 @@ JSON 형식으로 답변:
 2025년 최신 실업급여 정책을 반영하여 답변하세요.
 숫자, 기간, 조건 등 구체적인 정보를 포함하세요."""
 
-            payload = {
-                "model": str(config.MODEL),
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.5,
-                "max_tokens": 800,
-            }
+            completion = client.chat.completions.create(
+                model=config.MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.5,
+                max_tokens=800)
 
-            response = requests.post(url, headers=headers, json=payload, timeout=30)
-
-            if response.status_code == 200:
-                result = response.json()
-                state["raw_answer"] = result["choices"][0]["message"]["content"]
-                state["answer_method"] = "regenerated"
-                state["confidence"] = 0.85
-            else:
-                logger.error(f"Regeneration API error: {response.status_code}")
-                raise Exception(f"API call failed: {response.status_code}")
+            state["raw_answer"] = completion.choices[0].message.content
+            state["answer_method"] = "regenerated"
+            state["confidence"] = 0.85
 
         except Exception as e:
             logger.error(f"Regeneration failed: {e}")
@@ -499,3 +460,4 @@ JSON 형식으로 답변:
 # 기존 클래스 대체
 RAGWorkflow = SemanticRAGWorkflow
 ImprovedRAGWorkflow = SemanticRAGWorkflow
+
