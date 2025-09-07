@@ -44,7 +44,9 @@ ALLOWED_ORIGINS = [
     "https://sudanghelp.co.kr",  # 실제 서비스
     "https://www.sudanghelp.co.kr",  # www 버전 추가
     "http://localhost:3000",  # 로컬 개발
+    "http://127.0.0.1:5500",  # Live Server 추가
     "http://localhost:5000",  # 로컬 백엔드 테스트
+    "http://localhost:8000",  # Python 서버 추가
 ]
 
 # Railway 앱 도메인도 자동 추가
