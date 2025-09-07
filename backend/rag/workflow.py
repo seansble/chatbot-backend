@@ -121,7 +121,7 @@ class SemanticRAGWorkflow:
         return state
 
     def llm_evaluate_coverage(self, state: RAGState) -> RAGState:
-        """LLM을 사용한 의도 파악만 - 간소화"""
+        """LLM을 사용한 커버리지 평가"""
         state["debug_path"].append("llm_evaluate")
 
         try:
@@ -133,33 +133,59 @@ class SemanticRAGWorkflow:
                 api_key=config.OPENROUTER_API_KEY,
             )
 
-            # 의도 파악만 하는 간단한 프롬프트
-            prompt = f"""질문: {state['query']}
+            # RAG 결과로 질문에 답변 가능한지 평가
+            prompt = f"""[질문] {state['query']}
 
-이 질문의 핵심 의도를 한 줄로 파악하세요.
-예: "금액 계산 요청" / "자격 조건 확인" / "절차 문의" / "복합 질문"
+[RAG 검색 결과]
+{state['context']}
 
-답 (한 줄만):"""
+다음 기준으로 평가하세요:
+1. 질문의 핵심 요소(금액, 조건, 기간 등)가 RAG에 모두 포함되어 있는가?
+2. RAG 정보가 최신(2025년 기준)인가?
+3. RAG와 충돌할 수 있는 일반 상식 정보가 필요한가?
+
+답변 형식 (JSON):
+{{
+ "coverage_score": 0.0~1.0,
+ "missing_parts": ["부분1", "부분2"],
+ "has_conflict": false,
+ "intent": "질문 의도"
+}}"""
 
             completion = client.chat.completions.create(
                 model=config.EVAL_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=50,
+                max_tokens=200,
             )
 
-            intent = completion.choices[0].message.content.strip()
-            state["coverage_details"] = {"intent": intent}
+            response_text = completion.choices[0].message.content.strip()
 
-            # 항상 0.5 점수로 enhance_missing으로 보내기
-            state["coverage_score"] = 0.5
-            state["missing_parts"] = []
+            # JSON 파싱 시도
+            try:
+                eval_result = json.loads(response_text)
+                state["coverage_score"] = eval_result.get("coverage_score", 0.5)
+                state["missing_parts"] = eval_result.get(
+                    "missing_parts", []
+                )  # 이 줄 추가 필요
+                state["coverage_details"] = eval_result  # 이 줄도 추가 필요
 
-            logger.info(f"Query intent: {intent}")
+            except:
+                # JSON 파싱 실패시 relevance_score 기반 추정
+                if state.get("relevance_score", 0) > 0.7:
+                    state["coverage_score"] = 0.7  # RAG 검색 점수 높으면 높게
+                elif state.get("relevance_score", 0) > 0.4:
+                    state["coverage_score"] = 0.5  # 중간
+                else:
+                    state["coverage_score"] = 0.3  # 낮게
+                state["missing_parts"] = []
+                state["coverage_details"] = {"intent": "unknown"}
+
+            logger.info(f"Coverage score: {state['coverage_score']}")
 
         except Exception as e:
-            logger.error(f"Intent analysis failed: {str(e)}")
-            # 에러시에도 0.5로 설정
+            logger.error(f"Coverage evaluation failed: {str(e)}")
+            # 에러시 기본값
             state["coverage_score"] = 0.5
             state["coverage_details"] = {"intent": "unknown"}
             state["missing_parts"] = []
@@ -167,12 +193,40 @@ class SemanticRAGWorkflow:
         return state
 
     def route_by_coverage(self, state: RAGState) -> str:
-        """항상 enhance_missing으로 라우팅"""
-        # 무조건 partial로 반환하여 enhance_missing으로 보내기
-        return "partial"
+        """커버리지 점수에 따라 라우팅"""
+        score = state.get("coverage_score", 0.0)
+
+        if score >= 0.7:
+            return "complete"  # RAG로 충분
+        elif score >= 0.3:
+            return "partial"  # LLM 보완 필요
+        else:
+            return "insufficient"  # 전체 재생성
+
+    def _extract_key_facts(self, context: str) -> Dict[str, Any]:
+        facts = {}
+
+        # 더 정확한 패턴 매칭
+        if re.search(r"18개월[\s]*중[\s]*180일", context):
+            facts["min_days"] = "180일"
+            facts["period"] = "18개월"
+        elif re.search(r"(?<!\d)180일(?!\d)", context):
+            facts["min_days"] = "180일"
+
+        # 금액 정확히 추출
+        if match := re.search(r"(?<!\d)66,?000원", context):
+            facts["daily_max"] = "66,000원"
+        if match := re.search(r"(?<!\d)64,?192원", context):
+            facts["daily_min"] = "64,192원"
+        if "1년 이내" in context or "12개월 이내" in context:
+            facts["claim_period"] = "1년 이내"
+        if any(word in context for word in ["권고사직", "해고", "계약만료"]):
+            facts["eligible_reasons"] = "권고사직, 해고, 계약만료 등"
+
+        return facts
 
     def generate_from_rag(self, state: RAGState) -> RAGState:
-        """RAG 결과로 답변 생성 - 사실상 사용 안 함"""
+        """RAG 결과만으로 답변 생성"""
         state["debug_path"].append("generate_from_rag")
 
         try:
@@ -184,28 +238,35 @@ class SemanticRAGWorkflow:
                 api_key=config.OPENROUTER_API_KEY,
             )
 
-            prompt = f"""다음은 실업급여 관련 정보입니다. 사용자의 질문에 대해서만 답변하세요.
+            # RAG 정보 구조화
+            facts = self._extract_key_facts(state["context"])
 
-사용자 질문: {state['query']}
+            prompt = f"""[공식 정보 - 절대 변경 금지]
+{json.dumps(facts, ensure_ascii=False, indent=2)}
 
-참고 정보:
-{state['context']}
+[사용자 질문]
+{state['query']}
 
-위 참고 정보를 활용하여 사용자의 질문에 대한 답변만 작성하세요.
-다른 질문이나 예시는 절대 포함하지 마세요.
-간결하고 명확하게 답변하세요."""
+[지침]
+1. 위 공식 정보만 사용하세요
+2. 정보를 왜곡하거나 추가하지 마세요
+3. 친절하고 자연스러운 말투로 200자 내외
+4. 이모지 1개만 사용
+5. "예상", "아마" 같은 모호한 표현 금지
+
+답변:"""
 
             completion = client.chat.completions.create(
                 model=config.EVAL_MODEL,
                 messages=[
                     {
                         "role": "system",
-                        "content": "실업급여 전문 상담사입니다. 질문에 대한 답변만 간결하게 제공하세요.",
+                        "content": "당신은 한국 실업급여 전문 상담사입니다. 제공된 공식 정보만을 정확히 전달하세요.",
                     },
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.3,
-                max_tokens=500,
+                temperature=0.1,
+                max_tokens=400,
             )
 
             state["raw_answer"] = completion.choices[0].message.content
@@ -213,25 +274,18 @@ class SemanticRAGWorkflow:
             state["confidence"] = 0.9
 
         except Exception as e:
-            logger.error(f"Generation failed with error: {str(e)}")
-
-            if state.get("documents") and len(state["documents"]) > 0:
-                answer = self._extract_relevant_answer(
-                    state["query"], state["documents"]
-                )
-                state["raw_answer"] = answer
-            else:
-                state["raw_answer"] = (
-                    "죄송합니다. 관련 정보를 찾을 수 없습니다. 고용센터 1350으로 문의해주세요."
-                )
-
+            logger.error(f"Generation failed: {str(e)}")
+            # 폴백
+            state["raw_answer"] = self._extract_relevant_answer(
+                state["query"], state["documents"]
+            )
             state["answer_method"] = "rag_direct"
             state["confidence"] = 0.7
 
         return state
 
     def enhance_missing(self, state: RAGState) -> RAGState:
-        """Qwen3가 RAG 기반으로 답변 생성 - 항상 실행됨"""
+        """RAG 정보 기반 + LLM 보완"""
         state["debug_path"].append("enhance_missing")
 
         try:
@@ -243,23 +297,30 @@ class SemanticRAGWorkflow:
                 api_key=config.OPENROUTER_API_KEY,
             )
 
-            # RAG 우선 원칙을 명확히 한 프롬프트
-            prompt = f"""사용자 질문: {state['query']}
+            # RAG 정보 구조화
+            facts = self._extract_key_facts(state["context"])
 
-RAG 검색 결과 (2025년 최신 정보):
-{state['context']}
+            prompt = f"""[공식 정보 - 절대 변경 금지]
+{json.dumps(facts, ensure_ascii=False, indent=2)}
 
-답변 생성 규칙:
-1. **절대 규칙: RAG와 충돌하는 정보는 무조건 RAG가 정답**
-2. RAG에 있는 숫자, 날짜, 조건은 그대로 사용
-3. RAG에 없는 부분만 보충 (일반 상식 수준)
-4. 300자 이내로 간결하게
-5. 이모지 1-2개만 사용
-6. 친근하고 이해하기 쉽게 설명
+[절대 금지 정보]
+- "24개월 중 18개월" ❌ → "18개월 중 180일" ✅
+- "24개월 중 12개월" ❌ → "18개월 중 180일" ✅
+- "68,000원" ❌ → "66,000원 (2025년)" ✅
+- "63,816원" ❌ → "64,192원 (2025년)" ✅
+- "2년간 지급" ❌ → "최대 240일" ✅
+- "매월 지급" ❌ → "4주마다 인정" ✅
+- "180일 이상 근무" ❌ → "180일 이상 가입" ✅
 
-예시:
-- RAG: "180일 이상" → 이것만 사용 (다른 숫자 금지)
-- RAG: "2025년 기준" → 이것만 사용 (2024년 정보 금지)
+[사용자 질문]
+{state['query']}
+
+[지침]
+1. 위 [공식 정보]는 반드시 정확히 사용
+2. [절대 금지 정보]는 절대 포함하지 마세요
+3. 공식 정보에 없는 부분만 "일반적으로" 보완
+4. 200-300자, 이모지 1-2개
+5. 친근하고 정확하게
 
 답변:"""
 
@@ -268,15 +329,14 @@ RAG 검색 결과 (2025년 최신 정보):
                 messages=[
                     {
                         "role": "system",
-                        "content": """당신은 실업급여 전문 상담사입니다.
-중요: 제공된 RAG 정보와 다른 내용을 절대 생성하지 마세요.
-RAG에 있는 숫자, 조건, 날짜는 변경 불가입니다.
-친근하고 정확하게 답변하세요.""",
+                        "content": """당신은 한국 실업급여 전문 상담사입니다.
+제공된 공식 정보는 절대 변경하지 마세요.
+특히 숫자, 기간, 조건은 정확히 유지하세요.""",
                     },
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.3,
-                max_tokens=600,  # 300자 제한에 맞춰 축소
+                temperature=0.2,
+                max_tokens=500,
             )
 
             state["raw_answer"] = completion.choices[0].message.content
@@ -285,23 +345,34 @@ RAG에 있는 숫자, 조건, 날짜는 변경 불가입니다.
 
         except Exception as e:
             logger.error(f"Enhancement failed: {e}")
-            # 에러시 폴백
-            if state.get("documents"):
-                answer = self._extract_relevant_answer(
-                    state["query"], state["documents"]
-                )
-                state["raw_answer"] = answer
-            else:
-                state["raw_answer"] = "죄송합니다. 답변 생성 중 오류가 발생했습니다."
-
+            # 폴백
+            state["raw_answer"] = self._extract_relevant_answer(
+                state["query"], state["documents"]
+            )
             state["answer_method"] = "error"
-            state["confidence"] = 0.0
+            state["confidence"] = 0.5
 
         return state
 
     def regenerate_full(self, state: RAGState) -> RAGState:
-        """전체 재생성 - 사실상 사용 안 함"""
         state["debug_path"].append("regenerate_full")
+
+        # FALLBACK_ANSWERS 먼저 체크
+        try:
+            import config
+
+            query_lower = state["query"].lower()
+
+            for keyword, answer in config.FALLBACK_ANSWERS.items():
+                if keyword in query_lower:
+                    state["raw_answer"] = (
+                        f"{answer}\n\n※ 일반적인 기준으로 안내드립니다."
+                    )
+                    state["answer_method"] = "fallback"
+                    state["confidence"] = 0.75
+                    return state
+        except:
+            pass
 
         try:
             from openai import OpenAI
@@ -312,42 +383,49 @@ RAG에 있는 숫자, 조건, 날짜는 변경 불가입니다.
                 api_key=config.OPENROUTER_API_KEY,
             )
 
-            prompt = f"""질문: {state['query']}
+            prompt = f"""[사용자 질문]
+{state['query']}
 
-참고 정보 (2025년 기준):
-{state['context']}
+[부족한 RAG 정보]
+{state['context'] if state['context'] else '관련 정보 없음'}
 
-위 질문에 대해 완전하고 정확한 답변을 생성하세요.
-참고 정보가 있다면 우선 활용하고, 부족한 부분은 보충하세요.
-2025년 최신 실업급여 정책을 반영하여 답변하세요.
-숫자, 기간, 조건 등 구체적인 정보를 포함하세요."""
+[지침]
+1. 2025년 실업급여 기준으로 답변
+2. 다음 형식으로 답변:
+  - 핵심 답변 (일반적 기준)
+  - "※ 참고: 일반적인 기준으로 안내드립니다."
+  - "정확한 상담은 고용센터 1350으로 문의하세요."
+3. 200-300자, 이모지 1개
+
+[절대 금지 정보]
+- "24개월 중 18개월" ❌
+- "68,000원" ❌
+
+답변:"""
 
             completion = client.chat.completions.create(
                 model=config.MODEL,
                 messages=[
                     {
                         "role": "system",
-                        "content": "당신은 실업급여 전문 상담사입니다. 정확하고 최신 정보로 답변하세요.",
+                        "content": "당신은 한국 실업급여 전문 상담사입니다. 정확한 정보가 부족할 때는 일반적 기준을 안내하되, 반드시 고용센터 문의를 권하세요.",
                     },
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.3,
-                max_tokens=1000,
+                max_tokens=500,
             )
 
             state["raw_answer"] = completion.choices[0].message.content
             state["answer_method"] = "regenerated"
-            state["confidence"] = 0.85
+            state["confidence"] = 0.7
 
         except Exception as e:
             logger.error(f"Regeneration failed: {e}")
-            if state.get("documents"):
-                answer = self._extract_relevant_answer(
-                    state["query"], state["documents"]
-                )
-                state["raw_answer"] = answer
-            else:
-                state["raw_answer"] = "죄송합니다. 답변 생성 중 오류가 발생했습니다."
+            state[
+                "raw_answer"
+            ] = """죄송합니다. 답변 생성 중 오류가 발생했습니다.
+고용센터 1350으로 직접 문의해주세요."""
             state["answer_method"] = "error"
             state["confidence"] = 0.0
 
@@ -366,7 +444,7 @@ RAG에 있는 숫자, 조건, 날짜는 변경 불가입니다.
 
         state["final_answer"] = answer
 
-        # coverage_score가 0으로 리셋되는 버그 수정
+        # coverage_score 보정
         if state.get("coverage_score") == 0 and state.get("answer_method") != "error":
             logger.warning("Coverage score was 0, using confidence instead")
             state["coverage_score"] = state.get("confidence", 0.5)
@@ -412,8 +490,9 @@ RAG에 있는 숫자, 조건, 날짜는 변경 불가입니다.
                                 return answer
 
                 # 첫 번째 답변 반환 (폴백)
-                answer = text.split("답변:")[1].split("질문:")[0].strip()
-                return answer
+                if "답변:" in text:
+                    answer = text.split("답변:")[1].split("질문:")[0].strip()
+                    return answer
 
         # 기본 답변
         return """실업급여 수급을 위한 기본 조건:
@@ -449,7 +528,8 @@ RAG에 있는 숫자, 조건, 날짜는 변경 불가입니다.
             "answer": result.get("final_answer", ""),
             "confidence": result.get("confidence", 0.0),
             "method": result.get("answer_method", "unknown"),
-            "coverage": result.get("coverage_score", 0.0),
+            "coverage_score": result.get("coverage_score", 0.0),
+            "documents": result.get("documents", []),
             "debug": {
                 "path": result.get("debug_path", []),
                 "coverage_details": result.get("coverage_details", {}),
