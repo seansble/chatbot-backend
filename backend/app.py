@@ -294,28 +294,23 @@ def get_or_create_token(request):
 
 
 def check_token_usage(token, is_new_token):
-    """토큰 기반 사용량 체크"""
     today_str = date.today().isoformat()
-
+    
     if token not in token_usage:
         token_usage[token] = {}
-
+    
     current_count = token_usage[token].get(today_str, 0)
-
-    # 신규 토큰은 1회만 허용
-    if is_new_token and current_count >= config.NEW_USER_LIMIT:
-        return False, 0
-
-    # 기존 토큰은 3회
-    if not is_new_token and current_count >= config.REGULAR_USER_LIMIT:
-        return False, 0
-
-    # 사용 가능
+    
+    # 신규 사용자라도 이미 사용했으면 일반 사용자로 처리
+    if current_count > 0:
+        is_new_token = False
+    
+    # 한도 체크
     limit = config.NEW_USER_LIMIT if is_new_token else config.REGULAR_USER_LIMIT
-    remaining = limit - current_count
-
-    return True, remaining
-
+    if current_count >= limit:
+        return False, 0
+    
+    return True, limit - current_count
 
 def increment_token_usage(token):
     """토큰 사용량 증가"""
@@ -1123,18 +1118,20 @@ def chat():
 
         # 실업급여 관련 체크
         if not is_unemployment_related(question):
+            # 카운트 차감하지 않고 현재 상태만 확인
             if not is_dev:
-                can_use, remaining = check_token_usage(token, is_new)
+                today_str = date.today().isoformat()
+                current_count = token_usage.get(token, {}).get(today_str, 0)
+                limit = config.NEW_USER_LIMIT if is_new else config.REGULAR_USER_LIMIT
+                remaining = limit - current_count
             else:
                 remaining = 999
-
-            return jsonify(
-                {
-                    "answer": "실업급여 관련 질문만 답변 가능합니다. 문의: 고용노동부 상담센터 1350",
-                    "remaining": remaining,
-                    "is_new_user": is_new,
-                }
-            )
+            
+            return jsonify({
+                "answer": "실업급여 관련 질문만 답변 가능합니다...",
+                "remaining": remaining,  # 현재 남은 횟수만 표시
+                "is_new_user": is_new
+            })
 
         # 개발자가 아닐 때 토큰 제한 체크 (일일 3회)
         if not is_dev:
@@ -1172,14 +1169,9 @@ def chat():
         save_qa_with_user(question, answer, user_key, answer_hash)
 
         logger.info(
-            {
-                "action": "chat_request",
-                "token": token[:8],
-                "is_dev": is_dev,
-                "is_new": is_new,
-                "remaining": remaining,
-                "use_rag": USE_RAG,
-            }
+            f"Chat: token={token[:8]}, is_new={is_new}, "
+            f"remaining={remaining}, method=RAG, "
+            f"question_related={is_unemployment_related(question)}"
         )
 
         resp = make_response(
