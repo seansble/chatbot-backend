@@ -54,7 +54,12 @@ class QdrantVectorStore:
 
         # BM25 초기화 시도
         try:
-            self._load_all_documents()
+            # self._load_all_documents()  # 서버 시작 시 로드 비활성화
+            self.documents = []
+            self.tokenized_docs = []
+            self.doc_keys = []
+            self.bm25 = None
+            logger.info("초기 문서 로드 건너뜀 - 검색 시 로드됨")
         except Exception as e:
             logger.warning(f"BM25 초기화 실패 (정상): {e}")
             self.documents = []
