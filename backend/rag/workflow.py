@@ -106,22 +106,24 @@ class SemanticRAGWorkflow:
         return state
 
     def rag_search(self, state: RAGState) -> RAGState:
-        """RAG 검색"""
+        """RAG 검색 - 우리 시스템 사용"""
         state["debug_path"].append("rag_search")
         query = state["processed_query"]
 
-        # 하이브리드 검색
+        # 우리 RAG retriever 호출
         results = self.retriever.retrieve(query, top_k=5)
 
         state["documents"] = results
         state["relevance_score"] = results[0]["score"] if results else 0.0
         state["context"] = "\n".join([doc["text"] for doc in results[:3]])
 
-        logger.info(f"Retrieved {len(results)} documents")
+        logger.info(
+            f"Retrieved {len(results)} documents, top score: {state['relevance_score']:.3f}"
+        )
         return state
 
     def llm_evaluate_coverage(self, state: RAGState) -> RAGState:
-        """LLM을 사용한 커버리지 평가"""
+        """LLM을 사용한 커버리지 평가 - 우리 RAG 점수 기준 반영"""
         state["debug_path"].append("llm_evaluate")
 
         try:
@@ -155,7 +157,7 @@ class SemanticRAGWorkflow:
             completion = client.chat.completions.create(
                 model=config.EVAL_MODEL,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
+                temperature=0.1,  # 평가는 일관성이 중요
                 max_tokens=200,
             )
 
@@ -165,29 +167,43 @@ class SemanticRAGWorkflow:
             try:
                 eval_result = json.loads(response_text)
                 state["coverage_score"] = eval_result.get("coverage_score", 0.5)
-                state["missing_parts"] = eval_result.get(
-                    "missing_parts", []
-                )  # 이 줄 추가 필요
-                state["coverage_details"] = eval_result  # 이 줄도 추가 필요
+                state["missing_parts"] = eval_result.get("missing_parts", [])
+                state["coverage_details"] = eval_result
 
             except:
-                # JSON 파싱 실패시 relevance_score 기반 추정
-                if state.get("relevance_score", 0) > 0.7:
-                    state["coverage_score"] = 0.7  # RAG 검색 점수 높으면 높게
-                elif state.get("relevance_score", 0) > 0.4:
-                    state["coverage_score"] = 0.5  # 중간
-                else:
-                    state["coverage_score"] = 0.3  # 낮게
-                state["missing_parts"] = []
-                state["coverage_details"] = {"intent": "unknown"}
+                # JSON 파싱 실패시 우리 RAG 점수 기준으로 추정
+                relevance = state.get("relevance_score", 0)
 
-            logger.info(f"Coverage score: {state['coverage_score']}")
+                # 우리 RAG는 0.15가 높은 점수
+                if relevance > 0.15:
+                    state["coverage_score"] = 0.8  # RAG 신뢰
+                elif relevance > 0.10:
+                    state["coverage_score"] = 0.5  # 애매함
+                else:
+                    state["coverage_score"] = 0.2  # LLM 의존
+
+                state["missing_parts"] = []
+                state["coverage_details"] = {
+                    "intent": "unknown",
+                    "relevance_based": True,
+                }
+
+            logger.info(
+                f"Coverage score: {state['coverage_score']:.2f}, Relevance: {state.get('relevance_score', 0):.3f}"
+            )
 
         except Exception as e:
             logger.error(f"Coverage evaluation failed: {str(e)}")
-            # 에러시 기본값
-            state["coverage_score"] = 0.5
-            state["coverage_details"] = {"intent": "unknown"}
+            # 에러시 relevance_score 기반 판단
+            relevance = state.get("relevance_score", 0)
+            if relevance > 0.15:
+                state["coverage_score"] = 0.7
+            elif relevance > 0.10:
+                state["coverage_score"] = 0.4
+            else:
+                state["coverage_score"] = 0.2
+
+            state["coverage_details"] = {"intent": "unknown", "error": True}
             state["missing_parts"] = []
 
         return state
@@ -204,6 +220,7 @@ class SemanticRAGWorkflow:
             return "insufficient"  # 전체 재생성
 
     def _extract_key_facts(self, context: str) -> Dict[str, Any]:
+        """RAG 컨텍스트에서 핵심 사실 추출"""
         facts = {}
 
         # 더 정확한 패턴 매칭
@@ -214,9 +231,9 @@ class SemanticRAGWorkflow:
             facts["min_days"] = "180일"
 
         # 금액 정확히 추출
-        if match := re.search(r"(?<!\d)66,?000원", context):
+        if re.search(r"(?<!\d)66,?000원", context):
             facts["daily_max"] = "66,000원"
-        if match := re.search(r"(?<!\d)64,?192원", context):
+        if re.search(r"(?<!\d)64,?192원", context):
             facts["daily_min"] = "64,192원"
         if "1년 이내" in context or "12개월 이내" in context:
             facts["claim_period"] = "1년 이내"
@@ -226,7 +243,7 @@ class SemanticRAGWorkflow:
         return facts
 
     def generate_from_rag(self, state: RAGState) -> RAGState:
-        """RAG 결과만으로 답변 생성"""
+        """RAG 결과만으로 답변 생성 - RAG 내용 절대 우선"""
         state["debug_path"].append("generate_from_rag")
 
         try:
@@ -241,31 +258,34 @@ class SemanticRAGWorkflow:
             # RAG 정보 구조화
             facts = self._extract_key_facts(state["context"])
 
-            prompt = f"""[공식 정보 - 절대 변경 금지]
+            prompt = f"""[RAG 검색 결과]
+{state['context']}
+
+[추출된 핵심 정보]
 {json.dumps(facts, ensure_ascii=False, indent=2)}
 
 [사용자 질문]
 {state['query']}
 
-[지침]
-1. 위 공식 정보만 사용하세요
-2. 정보를 왜곡하거나 추가하지 마세요
-3. 친절하고 자연스러운 말투로 200자 내외
-4. 이모지 1개만 사용
-5. "예상", "아마" 같은 모호한 표현 금지
+[중요 지침]
+1. RAG 검색 결과의 숫자, 조건, 기간은 절대 변경 금지
+2. RAG와 충돌하는 정보가 있다면 무조건 RAG 우선
+3. RAG에 "2024년"이라고 있어도 그대로 사용
+4. 친절하고 자연스러운 말투로 200-300자
+5. 이모지 1개만 사용
 
 답변:"""
 
             completion = client.chat.completions.create(
-                model=config.EVAL_MODEL,
+                model=config.MODEL,
                 messages=[
                     {
                         "role": "system",
-                        "content": "당신은 한국 실업급여 전문 상담사입니다. 제공된 공식 정보만을 정확히 전달하세요.",
+                        "content": "당신은 한국 실업급여 전문 상담사입니다. RAG 정보를 정확히 전달하는 것이 최우선입니다.",
                     },
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.1,
+                temperature=0.2,  # 창의성 최소화, 정확성 우선
                 max_tokens=400,
             )
 
@@ -285,7 +305,7 @@ class SemanticRAGWorkflow:
         return state
 
     def enhance_missing(self, state: RAGState) -> RAGState:
-        """RAG 정보 기반 + LLM 보완"""
+        """RAG 정보 기반 + LLM 보완 - 충돌시 RAG 절대 우선"""
         state["debug_path"].append("enhance_missing")
 
         try:
@@ -300,27 +320,26 @@ class SemanticRAGWorkflow:
             # RAG 정보 구조화
             facts = self._extract_key_facts(state["context"])
 
-            prompt = f"""[공식 정보 - 절대 변경 금지]
+            prompt = f"""[RAG 검색 결과 - 절대 우선]
+{state['context']}
+
+[추출된 핵심 정보 - 변경 금지]
 {json.dumps(facts, ensure_ascii=False, indent=2)}
 
-[절대 금지 정보]
-- "24개월 중 18개월" ❌ → "18개월 중 180일" ✅
-- "24개월 중 12개월" ❌ → "18개월 중 180일" ✅
-- "68,000원" ❌ → "66,000원 (2025년)" ✅
-- "63,816원" ❌ → "64,192원 (2025년)" ✅
-- "2년간 지급" ❌ → "최대 240일" ✅
-- "매월 지급" ❌ → "4주마다 인정" ✅
-- "180일 이상 근무" ❌ → "180일 이상 가입" ✅
+[부족한 부분]
+{state.get('missing_parts', [])}
 
 [사용자 질문]
 {state['query']}
 
-[지침]
-1. 위 [공식 정보]는 반드시 정확히 사용
-2. [절대 금지 정보]는 절대 포함하지 마세요
-3. 공식 정보에 없는 부분만 "일반적으로" 보완
-4. 200-300자, 이모지 1-2개
-5. 친근하고 정확하게
+[엄격한 지침]
+1. RAG 정보와 충돌하면 무조건 RAG 따르기
+2. RAG에 있는 숫자는 1원도 바꾸지 말 것
+3. RAG에 없는 부분만 "일반적으로" 추가
+4. 충돌 예시:
+   - RAG: "65,000원" → 무조건 65,000원 사용
+   - 당신의 지식: "66,000원" → 무시
+5. 200-300자, 이모지 1-2개
 
 답변:"""
 
@@ -329,9 +348,7 @@ class SemanticRAGWorkflow:
                 messages=[
                     {
                         "role": "system",
-                        "content": """당신은 한국 실업급여 전문 상담사입니다.
-제공된 공식 정보는 절대 변경하지 마세요.
-특히 숫자, 기간, 조건은 정확히 유지하세요.""",
+                        "content": "RAG 정보가 진실입니다. RAG와 충돌하는 어떤 정보도 생성하지 마세요.",
                     },
                     {"role": "user", "content": prompt},
                 ],
@@ -355,6 +372,7 @@ class SemanticRAGWorkflow:
         return state
 
     def regenerate_full(self, state: RAGState) -> RAGState:
+        """RAG 정보 불충분시 전체 재생성"""
         state["debug_path"].append("regenerate_full")
 
         # FALLBACK_ANSWERS 먼저 체크
@@ -398,8 +416,8 @@ class SemanticRAGWorkflow:
 3. 200-300자, 이모지 1개
 
 [절대 금지 정보]
-- "24개월 중 18개월" ❌
-- "68,000원" ❌
+- "24개월 중 18개월" ❌ → "18개월 중 180일" ✅
+- "68,000원" ❌ → "66,000원" ✅
 
 답변:"""
 
@@ -465,43 +483,20 @@ class SemanticRAGWorkflow:
 
     def _extract_relevant_answer(self, query: str, documents: List[Dict]) -> str:
         """문서에서 관련 답변 추출"""
-        query_lower = query.lower()
+        if not documents:
+            return "관련 정보를 찾을 수 없습니다."
 
-        # 키워드 매칭으로 가장 관련된 답변 찾기
-        for doc in documents[:2]:
-            text = doc.get("text", "")
+        # 첫 번째 문서 사용
+        first_doc = documents[0]
+        text = first_doc.get("text", "")
 
-            # "질문:" "답변:" 패턴으로 분리
-            if "답변:" in text:
-                parts = text.split("질문:")
-                for part in parts:
-                    # 질문의 키워드가 포함된 부분 찾기
-                    if any(
-                        keyword in query_lower for keyword in ["조건", "자격", "가능"]
-                    ):
-                        if any(
-                            keyword in part.lower()
-                            for keyword in ["조건", "자격", "가능"]
-                        ):
-                            if "답변:" in part:
-                                answer = (
-                                    part.split("답변:")[1].split("질문:")[0].strip()
-                                )
-                                return answer
+        # 메타데이터에서 답변 추출 시도
+        metadata = first_doc.get("metadata", {})
+        if metadata.get("answer"):
+            return metadata["answer"]
 
-                # 첫 번째 답변 반환 (폴백)
-                if "답변:" in text:
-                    answer = text.split("답변:")[1].split("질문:")[0].strip()
-                    return answer
-
-        # 기본 답변
-        return """실업급여 수급을 위한 기본 조건:
-1. 이직일 이전 18개월간 고용보험 가입기간 180일 이상
-2. 비자발적 퇴직 (권고사직, 계약만료 등)
-3. 근로 의사와 능력이 있고 적극적 구직활동 중
-4. 이직 후 12개월 이내 신청
-
-자세한 상담은 고용센터 1350으로 문의하세요."""
+        # 텍스트 그대로 반환
+        return text[:300] if len(text) > 300 else text
 
     def run(self, query: str) -> Dict:
         """워크플로우 실행"""

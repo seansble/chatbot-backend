@@ -306,7 +306,7 @@ def check_token_usage(token, is_new_token):
         is_new_token = False
     
     # 한도 체크
-    limit = config.NEW_USER_LIMIT if is_new_token else config.REGULAR_USER_LIMIT
+    limit = config.DAILY_LIMIT
     if current_count >= limit:
         return False, 0
     
@@ -1122,7 +1122,7 @@ def chat():
             if not is_dev:
                 today_str = date.today().isoformat()
                 current_count = token_usage.get(token, {}).get(today_str, 0)
-                limit = config.NEW_USER_LIMIT if is_new else config.REGULAR_USER_LIMIT
+                limit = config.DAILY_LIMIT  # 모든 사용자 3회로 통일
                 remaining = limit - current_count
             else:
                 remaining = 999
@@ -1138,10 +1138,7 @@ def chat():
             can_use, remaining = check_token_usage(token, is_new)
 
             if not can_use:
-                if is_new:
-                    error_msg = "첫 방문은 1회만 가능합니다. 내일 다시 방문하시면 3회 이용 가능합니다."
-                else:
-                    error_msg = "일일 3회 초과. 내일 다시 이용하세요"
+                error_msg = "일일 3회 초과. 내일 다시 이용하세요"  # 통일된 메시지
 
                 return (
                     jsonify(

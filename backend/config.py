@@ -39,6 +39,19 @@ MODEL_NAME = "Qwen/Qwen3-235B-A22B-Instruct-2507-tput"
 MODEL = MODEL_NAME  # workflow.py가 config.MODEL을 참조하므로
 EVAL_MODEL = "Qwen/Qwen2.5-7B-Instruct-Turbo"
 
+# Temperature 설정
+EVAL_TEMPERATURE = 0.1  # 평가 모델 - 일관성 중요
+MODEL_TEMPERATURE = 0.2  # 생성 모델 - 정확성 우선
+
+# 답변 생성시 RAG 우선 설정
+RAG_PRIORITY_INSTRUCTIONS = """
+[RAG 정보 절대 우선 원칙]
+1. RAG 검색 결과의 모든 숫자, 날짜, 조건은 변경 금지
+2. RAG와 충돌하는 정보 생성시 무조건 RAG 따르기
+3. RAG에 2024년 정보가 있어도 그대로 사용
+4. 불확실한 경우 RAG 정보만 사용
+"""
+
 # CORS 설정 - 개발중에는 모두 허용
 ALLOWED_ORIGINS = [
     "https://sudanghelp.co.kr",  # 실제 서비스
@@ -63,8 +76,7 @@ if ENVIRONMENT:
 
 # 토큰 관련 설정 (일일 3회 제한 필수)
 REDIS_ENABLED = False  # Redis 사용 안 함 (메모리 사용)
-NEW_USER_LIMIT = 1  # 신규 사용자 일일 제한
-REGULAR_USER_LIMIT = 3  # 기존 사용자 일일 제한
+DAILY_LIMIT = 3  # 모든 사용자 일일 3회
 TOKEN_COOKIE_NAME = "user_token"
 TOKEN_MAX_AGE = 86400 * 30  # 30일
 
