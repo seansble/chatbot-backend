@@ -1,3 +1,36 @@
+# backend/app.py 맨 위에 추가
+import sys
+import traceback
+
+print("="*60)
+print("DEBUG: Starting imports...")
+print("="*60)
+
+try:
+    print("1. Importing Flask...")
+    from flask import Flask, request, jsonify, make_response
+    print("✓ Flask imported")
+    
+    print("2. Importing config...")
+    import config
+    print("✓ config imported")
+    
+    print("3. Importing RAG modules...")
+    from rag.retriever import RAGRetriever
+    print("✓ RAGRetriever imported")
+    from rag.workflow import SemanticRAGWorkflow
+    print("✓ SemanticRAGWorkflow imported")
+    
+    print("4. All imports successful!")
+    
+except Exception as e:
+    print("="*60)
+    print(f"❌ IMPORT ERROR: {e}")
+    print("="*60)
+    traceback.print_exc()
+    print("="*60)
+    sys.exit(1)
+    
 print("APP.PY IS LOADING")
 from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
