@@ -43,6 +43,55 @@ EVAL_MODEL = "Qwen/Qwen2.5-7B-Instruct-Turbo"
 EVAL_TEMPERATURE = 0.1  # 평가 모델 - 일관성 중요
 MODEL_TEMPERATURE = 0.2  # 생성 모델 - 정확성 우선
 
+# 계층형 프롬프트를 위한 기본 시스템 프롬프트 (짧고 핵심적)
+BASE_SYSTEM_PROMPT = (
+    "당신은 한국 실업급여 전문 상담사입니다. 정확하고 실용적으로 답변하세요."
+)
+
+# 구조화된 실업급여 정보 (필요시만 동적 주입)
+UNEMPLOYMENT_FACTS = {
+    "amounts": {
+        "daily_max": "66,000원",
+        "daily_min": "64,192원",
+        "rate": "평균임금의 60%",
+        "min_wage_hourly": "10,030원",
+    },
+    "eligibility": {
+        "insurance_period": "18개월 중 180일 이상",
+        "resignation_type": "비자발적 이직 필수",
+        "age_limit": "65세 미만",
+        "claim_deadline": "이직 후 1년 이내",
+    },
+    "periods": {
+        "under_30": "90~120일",
+        "30_to_50": "120~180일",
+        "50_plus": "120~210일",
+        "disabled_50_plus": "120~270일",
+    },
+    "job_seeking": {
+        "frequency": "4주 1회 이상",
+        "5th_onwards": "4주 2회 (최소 1회 실제 구직)",
+        "activities": "워크넷 이력서 등록, 입사지원, 면접, 직업훈련",
+    },
+    "reduction": {
+        "3_times": "10% 감액",
+        "4_times": "25% 감액",
+        "5_times": "40% 감액",
+        "6_times": "50% 감액",
+    },
+}
+
+# 자주 틀리는 정보 (금지 사항)
+COMMON_MISTAKES = [
+    "24개월 중 18개월",  # 잘못된 기간
+    "18개월 중 12개월",  # 잘못된 기간
+    "68,000원",  # 잘못된 상한액
+    "평균임금의 50%",  # 잘못된 비율
+    "70,000원",  # 잘못된 상한액
+    "최저임금의 90%",  # 잘못된 하한액
+    "이직 후 6개월",  # 잘못된 신청기한
+]
+
 # 답변 생성시 RAG 우선 설정
 RAG_PRIORITY_INSTRUCTIONS = """
 [RAG 정보 절대 우선 원칙]
@@ -124,7 +173,7 @@ FALLBACK_ANSWERS = {
 ※ 2025년부터 강화된 기준 적용""",
 }
 
-# AI 시스템 프롬프트
+# AI 시스템 프롬프트 (이전 버전 유지)
 SYSTEM_PROMPT = """당신은 한국 실업급여 전문 상담사입니다.
 
 [핵심 역할]

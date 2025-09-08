@@ -171,16 +171,16 @@ class SemanticRAGWorkflow:
                 state["coverage_details"] = eval_result
 
             except:
-                # JSON 파싱 실패시 우리 RAG 점수 기준으로 추정
+                # JSON 파싱 실패시 우리 RAG 점수 기준으로 추정 (수정된 로직)
                 relevance = state.get("relevance_score", 0)
 
-                # 우리 RAG는 0.15가 높은 점수
-                if relevance > 0.15:
-                    state["coverage_score"] = 0.8  # RAG 신뢰
-                elif relevance > 0.10:
-                    state["coverage_score"] = 0.5  # 애매함
+                # 더 세밀한 구간 설정
+                if relevance > 0.20:
+                    state["coverage_score"] = 0.7
+                elif relevance > 0.15:
+                    state["coverage_score"] = 0.5
                 else:
-                    state["coverage_score"] = 0.2  # LLM 의존
+                    state["coverage_score"] = 0.2  # 대부분 insufficient로
 
                 state["missing_parts"] = []
                 state["coverage_details"] = {
@@ -202,12 +202,12 @@ class SemanticRAGWorkflow:
 
         except Exception as e:
             logger.error(f"Coverage evaluation failed: {str(e)}")
-            # 에러시 relevance_score 기반 판단
+            # 에러시 relevance_score 기반 판단 (수정된 로직)
             relevance = state.get("relevance_score", 0)
-            if relevance > 0.15:
+            if relevance > 0.20:
                 state["coverage_score"] = 0.7
-            elif relevance > 0.10:
-                state["coverage_score"] = 0.4
+            elif relevance > 0.15:
+                state["coverage_score"] = 0.5
             else:
                 state["coverage_score"] = 0.2
 
@@ -217,15 +217,15 @@ class SemanticRAGWorkflow:
         return state
 
     def route_by_coverage(self, state: RAGState) -> str:
-        """커버리지 점수에 따라 라우팅"""
+        """커버리지 점수에 따라 라우팅 (수정된 기준)"""
         score = state.get("coverage_score", 0.0)
 
-        if score >= 0.7:
+        if score >= 0.8:  # 0.7 → 0.8 (더 엄격)
             return "complete"  # RAG로 충분
-        elif score >= 0.3:
+        elif score >= 0.4:  # 0.3 → 0.4
             return "partial"  # LLM 보완 필요
         else:
-            return "insufficient"  # 전체 재생성
+            return "insufficient"  # 전체 재생성 (LLM 주로 사용)
 
     def _extract_key_facts(self, context: str) -> Dict[str, Any]:
         """RAG 컨텍스트에서 핵심 사실 추출"""
@@ -278,10 +278,9 @@ class SemanticRAGWorkflow:
 [중요 지침]
 1. RAG 검색 결과의 숫자, 조건, 기간은 절대 변경 금지
 2. RAG와 충돌하는 정보가 있다면 무조건 RAG 우선
-3. RAG에 "2024년"이라고 있어도 그대로 사용
-4. 친절하고 자연스러운 말투로 답변
-5. 답변은 400자 이내로 작성하고, 넘으면 핵심만 요약하세요
-6. 이모지 1개만 사용
+3. 친절하고 자연스러운 말투로 답변
+4. 답변은 500자 이내로 작성하고, 넘으면 핵심만 요약하세요
+5. 이모지 1개만 사용
 
 답변:"""
 
@@ -314,7 +313,7 @@ class SemanticRAGWorkflow:
         return state
 
     def enhance_missing(self, state: RAGState) -> RAGState:
-        """RAG 정보 기반 + LLM 보완 - 충돌시 RAG 절대 우선"""
+        """RAG 정보 기반 + LLM 보완 - 계층형 프롬프트 적용"""
         state["debug_path"].append("enhance_missing")
 
         try:
@@ -326,42 +325,75 @@ class SemanticRAGWorkflow:
                 api_key=config.OPENROUTER_API_KEY,
             )
 
-            # RAG 정보 구조화
-            facts = self._extract_key_facts(state["context"])
+            # 1. 기본 시스템 프롬프트
+            base_system = config.BASE_SYSTEM_PROMPT
 
-            prompt = f"""[RAG 검색 결과 - 절대 우선]
-{state['context']}
+            # 2. 질문 분석
+            query = state["query"]
+            needs_calculation = "얼마" in query or "금액" in query
+            needs_eligibility = "조건" in query or "자격" in query
+            needs_period = "기간" in query or "언제" in query
 
-[추출된 핵심 정보 - 변경 금지]
-{json.dumps(facts, ensure_ascii=False, indent=2)}
+            # 3. 필요한 정보만 동적 주입
+            dynamic_context = []
 
-[부족한 부분]
-{state.get('missing_parts', [])}
+            if needs_calculation:
+                facts = config.UNEMPLOYMENT_FACTS["amounts"]
+                dynamic_context.append(
+                    f"""[금액 정보]
+- 일 상한액: {facts['daily_max']}
+- 일 하한액: {facts['daily_min']}
+- 지급률: {facts['rate']}"""
+                )
 
-[사용자 질문]
-{state['query']}
+            if needs_eligibility:
+                facts = config.UNEMPLOYMENT_FACTS["eligibility"]
+                dynamic_context.append(
+                    f"""[자격 조건]
+- {facts['insurance_period']}
+- {facts['resignation_type']}"""
+                )
 
-[엄격한 지침]
-1. RAG 정보와 충돌하면 무조건 RAG 따르기
-2. RAG에 있는 숫자는 1원도 바꾸지 말 것
-3. RAG에 없는 부분만 "일반적으로" 추가
-4. 충돌 예시:
-   - RAG: "65,000원" → 무조건 65,000원 사용
-   - 당신의 지식: "66,000원" → 무시
-5. 답변은 400자 이내, 넘으면 핵심만 요약
-6. 이모지 1-2개
+            if needs_period:
+                facts = config.UNEMPLOYMENT_FACTS["periods"]
+                dynamic_context.append(
+                    f"""[수급 기간]
+- 50세 미만: {facts['30_to_50']}
+- 50세 이상: {facts['50_plus']}"""
+                )
 
-답변:"""
+            # 4. RAG 정보 구조화
+            rag_facts = self._extract_key_facts(state["context"])
+
+            # 5. 메시지 구성
+            messages = [{"role": "system", "content": base_system}]
+
+            if dynamic_context:
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": "[핵심 정보]\n" + "\n".join(dynamic_context),
+                    }
+                )
+
+            # RAG 정보 추가
+            messages.append(
+                {
+                    "role": "system",
+                    "content": f"[RAG 정보 - 절대 우선]\n{state['context'][:500]}",
+                }
+            )
+
+            user_prompt = f"""질문: {query}
+
+RAG 정보를 우선하되, 부족한 부분은 보완하세요.
+400자 이내로 구체적이고 실용적으로 답변."""
+
+            messages.append({"role": "user", "content": user_prompt})
 
             completion = client.chat.completions.create(
                 model=config.MODEL,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "RAG 정보가 진실입니다. RAG와 충돌하는 어떤 정보도 생성하지 마세요.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
+                messages=messages,
                 temperature=0.2,
                 max_tokens=400,
             )
@@ -382,7 +414,7 @@ class SemanticRAGWorkflow:
         return state
 
     def regenerate_full(self, state: RAGState) -> RAGState:
-        """RAG 정보 불충분시 전체 재생성 - Qwen3 전문지식 활용"""
+        """RAG 정보 불충분시 전체 재생성 - 계층형 프롬프트 적용"""
         state["debug_path"].append("regenerate_full")
 
         # FALLBACK_ANSWERS 먼저 체크
@@ -409,37 +441,97 @@ class SemanticRAGWorkflow:
                 api_key=config.OPENROUTER_API_KEY,
             )
 
-            # 강력한 시스템 프롬프트
-            system_prompt = """당신은 한국 고용노동부 실업급여 전문 상담사입니다.
+            # 1. 기본 시스템 프롬프트 (짧게)
+            base_system = config.BASE_SYSTEM_PROMPT
 
-2025년 실업급여 핵심 정보:
-- 일 상한액: 66,000원
-- 일 하한액: 64,192원 (최저임금 80%)
-- 지급률: 평균임금의 60%
-- 수급기간: 120일~270일 (나이와 가입기간별)
-- 수급조건: 18개월 중 180일 이상 고용보험 가입
-- 권고사직: 비자발적 이직으로 인정 (증빙 필요)
-- 구직활동: 4주 1회 이상 (5차부터 2회, 최소 1회는 실제 구직)
+            # 2. 질문 분석
+            query = state["query"]
+            needs_calculation = "얼마" in query or "금액" in query or "계산" in query
+            needs_eligibility = "조건" in query or "자격" in query or "가능" in query
+            needs_period = "기간" in query or "언제" in query or "얼마나" in query
+            needs_job_seeking = "구직" in query or "실업인정" in query
+            needs_reduction = "반복" in query or "감액" in query
 
-답변 원칙:
-1. 구체적인 수치와 조건을 명시
-2. 실제 예시를 포함
-3. 친절하지만 정확하게
-4. 틀린 정보는 절대 금지
-5. 답변은 400자 이내로 간결하게"""
+            # 3. 필요한 정보만 동적 주입
+            dynamic_context = []
 
-            user_prompt = f"""질문: {state['query']}
+            if needs_calculation:
+                facts = config.UNEMPLOYMENT_FACTS["amounts"]
+                dynamic_context.append(
+                    f"""[금액 정보]
+- 일 상한액: {facts['daily_max']}
+- 일 하한액: {facts['daily_min']}
+- 지급률: {facts['rate']}
+- 최저임금: 시간당 {facts['min_wage_hourly']}"""
+                )
+
+            if needs_eligibility:
+                facts = config.UNEMPLOYMENT_FACTS["eligibility"]
+                dynamic_context.append(
+                    f"""[자격 조건]
+- 가입기간: {facts['insurance_period']}
+- 이직사유: {facts['resignation_type']}
+- 연령제한: {facts['age_limit']}
+- 신청기한: {facts['claim_deadline']}"""
+                )
+
+            if needs_period:
+                facts = config.UNEMPLOYMENT_FACTS["periods"]
+                dynamic_context.append(
+                    f"""[수급 기간]
+- 30세 미만: {facts['under_30']}
+- 30~50세: {facts['30_to_50']}
+- 50세 이상: {facts['50_plus']}
+- 50세 이상 장애인: {facts['disabled_50_plus']}"""
+                )
+
+            if needs_job_seeking:
+                facts = config.UNEMPLOYMENT_FACTS["job_seeking"]
+                dynamic_context.append(
+                    f"""[구직활동]
+- 빈도: {facts['frequency']}
+- 5차 이후: {facts['5th_onwards']}
+- 인정활동: {facts['activities']}"""
+                )
+
+            if needs_reduction:
+                facts = config.UNEMPLOYMENT_FACTS["reduction"]
+                dynamic_context.append(
+                    f"""[반복수급 감액]
+- 5년 내 3회: {facts['3_times']}
+- 5년 내 4회: {facts['4_times']}
+- 5년 내 5회: {facts['5_times']}
+- 5년 내 6회: {facts['6_times']}"""
+                )
+
+            # 4. 금지 정보 추가
+            forbidden_context = f"""[절대 금지 정보]
+다음은 잘못된 정보이므로 절대 사용하지 마세요:
+{', '.join(config.COMMON_MISTAKES[:3])}"""
+
+            # 5. 메시지 구성
+            messages = [{"role": "system", "content": base_system}]
+
+            if dynamic_context:
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": "[2025년 핵심 정보]\n" + "\n".join(dynamic_context),
+                    }
+                )
+
+            messages.append({"role": "system", "content": forbidden_context})
+
+            user_prompt = f"""질문: {query}
 
 위 질문에 대해 2025년 기준으로 정확하게 답변해주세요.
-구체적인 금액, 기간, 조건을 포함하되 400자 이내로 작성하세요.
-답변 끝에 "※ 정확한 상담은 고용센터 1350"을 추가하세요."""
+구체적인 금액, 기간, 조건을 포함하되 400자 이내로 작성하세요."""
+
+            messages.append({"role": "user", "content": user_prompt})
 
             completion = client.chat.completions.create(
                 model=config.MODEL,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
+                messages=messages,
                 temperature=0.2,  # 일관성 중요
                 max_tokens=400,
             )
