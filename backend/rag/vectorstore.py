@@ -323,7 +323,7 @@ class QdrantVectorStore:
 
                 logger.debug(
                     f"BM25 결과 {i+1} - doc_key: {doc_key_display}, "
-                    f"score: {result.get('score', 0):.3f}"  # hybrid_score 등 제거
+                    f"score: {result.get('score', 0):.3f}"
                 )
 
             return results
@@ -364,8 +364,20 @@ class QdrantVectorStore:
     ) -> List[Dict]:
         """하이브리드 검색 - RRF 기반 결합 (doc_key 사용)"""
 
+        # BM25 첫 검색 시 자동 로드
+        if self.bm25 is None or not self.documents:
+            logger.info("BM25 미초기화 - 첫 검색 시 로드 중...")
+            try:
+                self._load_all_documents()
+                if self.bm25:
+                    logger.info(f"✅ BM25 로드 성공: {len(self.documents)}개 문서")
+                else:
+                    logger.warning("BM25 로드 실패 - 벡터 검색만 사용")
+            except Exception as e:
+                logger.error(f"BM25 로드 중 에러: {e}")
+
         # 1. 각각 검색 (더 많이 수집)
-        bm25_results = self.bm25_search(query, top_k=50)
+        bm25_results = self.bm25_search(query, top_k=50) if self.bm25 else []
         vector_results = self.search(query_embedding, top_k=100)
 
         # 2. doc_key 기반 RRF 스코어 계산

@@ -188,8 +188,16 @@ class SemanticRAGWorkflow:
                     "relevance_based": True,
                 }
 
+            # 평가 디버깅 로그 추가
             logger.info(
-                f"Coverage score: {state['coverage_score']:.2f}, Relevance: {state.get('relevance_score', 0):.3f}"
+                f"""
+[평가 디버그]
+- 질문: {state['query'][:50]}
+- RAG 점수: {state.get('relevance_score', 0):.3f}
+- Coverage: {state.get('coverage_score', 0):.2f}
+- 경로: {self.route_by_coverage(state)}
+- RAG 문서 수: {len(state.get('documents', []))}
+"""
             )
 
         except Exception as e:
@@ -271,8 +279,9 @@ class SemanticRAGWorkflow:
 1. RAG 검색 결과의 숫자, 조건, 기간은 절대 변경 금지
 2. RAG와 충돌하는 정보가 있다면 무조건 RAG 우선
 3. RAG에 "2024년"이라고 있어도 그대로 사용
-4. 친절하고 자연스러운 말투로 200-300자
-5. 이모지 1개만 사용
+4. 친절하고 자연스러운 말투로 답변
+5. 답변은 400자 이내로 작성하고, 넘으면 핵심만 요약하세요
+6. 이모지 1개만 사용
 
 답변:"""
 
@@ -285,7 +294,7 @@ class SemanticRAGWorkflow:
                     },
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.2,  # 창의성 최소화, 정확성 우선
+                temperature=0.2,  # 일관성 우선
                 max_tokens=400,
             )
 
@@ -339,7 +348,8 @@ class SemanticRAGWorkflow:
 4. 충돌 예시:
    - RAG: "65,000원" → 무조건 65,000원 사용
    - 당신의 지식: "66,000원" → 무시
-5. 200-300자, 이모지 1-2개
+5. 답변은 400자 이내, 넘으면 핵심만 요약
+6. 이모지 1-2개
 
 답변:"""
 
@@ -353,7 +363,7 @@ class SemanticRAGWorkflow:
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.2,
-                max_tokens=500,
+                max_tokens=400,
             )
 
             state["raw_answer"] = completion.choices[0].message.content
@@ -372,7 +382,7 @@ class SemanticRAGWorkflow:
         return state
 
     def regenerate_full(self, state: RAGState) -> RAGState:
-        """RAG 정보 불충분시 전체 재생성"""
+        """RAG 정보 불충분시 전체 재생성 - Qwen3 전문지식 활용"""
         state["debug_path"].append("regenerate_full")
 
         # FALLBACK_ANSWERS 먼저 체크
@@ -383,9 +393,7 @@ class SemanticRAGWorkflow:
 
             for keyword, answer in config.FALLBACK_ANSWERS.items():
                 if keyword in query_lower:
-                    state["raw_answer"] = (
-                        f"{answer}\n\n※ 일반적인 기준으로 안내드립니다."
-                    )
+                    state["raw_answer"] = answer
                     state["answer_method"] = "fallback"
                     state["confidence"] = 0.75
                     return state
@@ -401,37 +409,39 @@ class SemanticRAGWorkflow:
                 api_key=config.OPENROUTER_API_KEY,
             )
 
-            prompt = f"""[사용자 질문]
-{state['query']}
+            # 강력한 시스템 프롬프트
+            system_prompt = """당신은 한국 고용노동부 실업급여 전문 상담사입니다.
 
-[부족한 RAG 정보]
-{state['context'] if state['context'] else '관련 정보 없음'}
+2025년 실업급여 핵심 정보:
+- 일 상한액: 66,000원
+- 일 하한액: 64,192원 (최저임금 80%)
+- 지급률: 평균임금의 60%
+- 수급기간: 120일~270일 (나이와 가입기간별)
+- 수급조건: 18개월 중 180일 이상 고용보험 가입
+- 권고사직: 비자발적 이직으로 인정 (증빙 필요)
+- 구직활동: 4주 1회 이상 (5차부터 2회, 최소 1회는 실제 구직)
 
-[지침]
-1. 2025년 실업급여 기준으로 답변
-2. 다음 형식으로 답변:
-  - 핵심 답변 (일반적 기준)
-  - "※ 참고: 일반적인 기준으로 안내드립니다."
-  - "정확한 상담은 고용센터 1350으로 문의하세요."
-3. 200-300자, 이모지 1개
+답변 원칙:
+1. 구체적인 수치와 조건을 명시
+2. 실제 예시를 포함
+3. 친절하지만 정확하게
+4. 틀린 정보는 절대 금지
+5. 답변은 400자 이내로 간결하게"""
 
-[절대 금지 정보]
-- "24개월 중 18개월" ❌ → "18개월 중 180일" ✅
-- "68,000원" ❌ → "66,000원" ✅
+            user_prompt = f"""질문: {state['query']}
 
-답변:"""
+위 질문에 대해 2025년 기준으로 정확하게 답변해주세요.
+구체적인 금액, 기간, 조건을 포함하되 400자 이내로 작성하세요.
+답변 끝에 "※ 정확한 상담은 고용센터 1350"을 추가하세요."""
 
             completion = client.chat.completions.create(
                 model=config.MODEL,
                 messages=[
-                    {
-                        "role": "system",
-                        "content": "당신은 한국 실업급여 전문 상담사입니다. 정확한 정보가 부족할 때는 일반적 기준을 안내하되, 반드시 고용센터 문의를 권하세요.",
-                    },
-                    {"role": "user", "content": prompt},
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
                 ],
-                temperature=0.3,
-                max_tokens=500,
+                temperature=0.2,  # 일관성 중요
+                max_tokens=400,
             )
 
             state["raw_answer"] = completion.choices[0].message.content
