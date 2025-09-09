@@ -19,7 +19,7 @@ class BGEEmbedder:
         return cls._instance
 
     def __init__(self):
-        """BGE-M3 임베더 - 전처리와 동일한 모델 사용"""
+        """BGE-M3 임베더 - 로컬에서도 실제 모델 사용"""
         self.dimension = 1024
 
         # 이미 모델이 로드되어 있으면 스킵
@@ -27,49 +27,43 @@ class BGEEmbedder:
             self.model = BGEEmbedder._model
             return
 
-        # Railway 환경에서만 실제 모델 로드
-        if os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("USE_REAL_EMBEDDING"):
-            try:
-                from sentence_transformers import SentenceTransformer
+        # 환경변수 체크 제거 - 항상 실제 모델 로드 시도
+        try:
+            from sentence_transformers import SentenceTransformer
 
-                logger.info("Loading BGE-M3 model...")
-                BGEEmbedder._model = SentenceTransformer("BAAI/bge-m3")
-                self.model = BGEEmbedder._model
-                logger.info(f"✅ BGE-M3 loaded successfully! 차원: {self.dimension}")
+            logger.info("Loading BGE-M3 model...")
+            BGEEmbedder._model = SentenceTransformer("BAAI/bge-m3")
+            self.model = BGEEmbedder._model
+            self.use_dummy = False  # 실제 모델 사용
+            logger.info(f"✅ BGE-M3 loaded successfully! 차원: {self.dimension}")
 
-            except Exception as e:
-                logger.warning(f"Failed to load BGE-M3 model: {e}")
-                logger.info("Falling back to dummy embedder")
-                self.model = None
-        else:
-            logger.info("Using dummy embedder for local development")
+        except Exception as e:
+            logger.warning(f"Failed to load BGE-M3 model: {e}")
+            logger.info("Falling back to dummy embedder")
             self.model = None
+            self.use_dummy = True  # 더미 모드
 
     def embed_query(self, query: str) -> np.ndarray:
         """질의 임베딩 - BGE-M3 프리픽스 적용"""
         if self.model is None:
-            # 더미 임베딩
-            logger.debug("Generating dummy embedding for query")
-            return np.random.random(self.dimension)
+            # 더미 임베딩 (시드 고정으로 일관성 유지)
+            np.random.seed(hash(query) % 10000)
+            return np.random.randn(self.dimension)  # randn으로 변경
 
         # 실제 BGE-M3 임베딩
         try:
-            # BGE-M3 규약: query 프리픽스 필수!
             prefixed_query = f"query: {query}"
-
             embedding = self.model.encode(
-                prefixed_query,  # 프리픽스 추가된 쿼리
-                normalize_embeddings=True,  # 정규화 중요!
+                prefixed_query,
+                normalize_embeddings=True,
                 show_progress_bar=False,
                 convert_to_numpy=True,
-            )
-            logger.debug(
-                f"Generated real query embedding with prefix: shape {embedding.shape}"
             )
             return embedding
         except Exception as e:
             logger.error(f"Error in embed_query: {e}")
-            return np.random.random(self.dimension)
+            np.random.seed(hash(query) % 10000)
+            return np.random.randn(self.dimension)
 
     def embed_documents(self, texts: List[str]) -> np.ndarray:
         """문서 임베딩 - BGE-M3 프리픽스 적용"""
@@ -78,7 +72,8 @@ class BGEEmbedder:
 
         if self.model is None:
             logger.debug(f"Generating dummy embeddings for {len(texts)} documents")
-            return np.random.random((len(texts), self.dimension))
+            np.random.seed(hash(str(texts)) % 10000)
+            return np.random.randn(len(texts), self.dimension)  # randn으로 변경
 
         try:
             # BGE-M3 규약: passage 프리픽스 필수!
@@ -97,4 +92,4 @@ class BGEEmbedder:
             return embeddings
         except Exception as e:
             logger.error(f"Error in embed_documents: {e}")
-            return np.random.random((len(texts), self.dimension))
+            return np.random.randn(len(texts), self.dimension)  # randn으로 통일

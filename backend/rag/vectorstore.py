@@ -105,6 +105,9 @@ class QdrantVectorStore:
                         "id": item.get("id", str(uuid.uuid4())),
                         "doc_key": doc_key,
                         "text": item.get("text", ""),
+                        "parent_text": item.get(
+                            "parent_text", item.get("text", "")
+                        ),  # 이 줄 추가!
                         "metadata": {
                             "category": item.get("category", ""),
                             "keywords": item.get("keywords", []),
@@ -263,6 +266,9 @@ class QdrantVectorStore:
         return [
             {
                 "text": hit.payload["text"],
+                "parent_text": hit.payload.get(
+                    "parent_text", hit.payload["text"]
+                ),  # Parent 추가
                 "doc_key": hit.payload.get("doc_key"),
                 "metadata": hit.payload.get("metadata", {}),
                 "score": hit.score,
@@ -501,13 +507,24 @@ class QdrantVectorStore:
         # 6. 정렬
         sorted_results = sorted(combined.items(), key=lambda x: x[1], reverse=True)
 
-        # 7. 결과 생성
+        # 7. 결과 생성 (Parent-Child 처리 추가)
         results = []
         seen_keys = set()
 
         # 상위 결과 추가
         for doc_key, score in sorted_results[:top_k]:
             doc = all_docs[doc_key].copy()
+
+            # Parent-Child 처리: parent_text가 있으면 우선 사용
+            if "parent_text" in doc.get("metadata", {}):
+                doc["parent_text"] = doc["metadata"]["parent_text"]
+            elif "parent_text" in doc:
+                # 이미 parent_text가 최상위에 있는 경우
+                pass
+            else:
+                # parent_text가 없으면 text를 parent_text로 복사
+                doc["parent_text"] = doc["text"]
+
             doc["hybrid_score"] = score
             doc["bm25_rrf"] = bm25_rrf.get(doc_key, 0)
             doc["vector_rrf"] = vector_rrf.get(doc_key, 0)

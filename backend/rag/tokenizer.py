@@ -13,8 +13,10 @@ class KiwiTokenizer:
             self.kiwi = Kiwi(typos="basic", model_type="knlm")
             logger.info("✅ Kiwi 토크나이저 초기화 완료")
 
-            # 실업급여 도메인 복합명사
+            # 실업급여 도메인 복합명사 (반복수급 관련 추가)
             self.compound_nouns = {
+                "반복수급",
+                "반복수급자",
                 "육아휴직",
                 "산전후휴가",
                 "권고사직",
@@ -31,6 +33,8 @@ class KiwiTokenizer:
                 "이직확인서",
                 "수급자격",
                 "소정급여일수",
+                "조기재취업",
+                "조기재취업수당",
             }
 
             # 실업급여 도메인 사용자 사전 추가
@@ -45,6 +49,8 @@ class KiwiTokenizer:
             return
 
         user_words = [
+            ("반복수급", "NNP", 15.0),  # 우선순위 높임
+            ("반복수급자", "NNP", 15.0),  # 우선순위 높임
             ("실업급여", "NNP", 10.0),
             ("구직활동", "NNP", 10.0),
             ("고용보험", "NNP", 10.0),
@@ -57,7 +63,8 @@ class KiwiTokenizer:
             ("계약만료", "NNP", 10.0),
             ("구직급여", "NNP", 10.0),
             ("취업촉진수당", "NNP", 10.0),
-            ("조기재취업수당", "NNP", 10.0),
+            ("조기재취업", "NNP", 12.0),  # 우선순위 높임
+            ("조기재취업수당", "NNP", 12.0),  # 우선순위 높임
             ("광역구직활동비", "NNP", 10.0),
             ("이주비", "NNP", 10.0),
             ("직업능력개발수당", "NNP", 10.0),
@@ -71,12 +78,12 @@ class KiwiTokenizer:
             ("중도해지", "NNP", 10.0),
             ("만기해지", "NNP", 10.0),
             ("피보험자격", "NNP", 10.0),
-            ("육아휴직", "NNP", 10.0),  # 추가
-            ("산전후휴가", "NNP", 10.0),  # 추가
-            ("임금체불", "NNP", 10.0),  # 추가
-            ("평균임금", "NNP", 10.0),  # 추가
-            ("체불확인서", "NNP", 10.0),  # 추가
-            ("정당한사유", "NNP", 10.0),  # 추가
+            ("육아휴직", "NNP", 10.0),
+            ("산전후휴가", "NNP", 10.0),
+            ("임금체불", "NNP", 10.0),
+            ("평균임금", "NNP", 10.0),
+            ("체불확인서", "NNP", 10.0),
+            ("정당한사유", "NNP", 10.0),
         ]
 
         try:
@@ -87,60 +94,36 @@ class KiwiTokenizer:
             logger.warning(f"사용자 사전 추가 실패: {e}")
 
     def tokenize(self, text: str) -> List[str]:
-        """텍스트를 토큰화 - 복합명사 처리 추가"""
+        """텍스트를 토큰화 - 복합명사와 일반 토큰 모두 포함"""
         if not self.kiwi:
             return self._simple_fallback(text)
 
         try:
-            # 1차 시도: 정상 토큰화
+            # Kiwi 토큰화
             result = self.kiwi.tokenize(text, normalize_coda=True)
-
+            
             if not result:
                 return self._simple_fallback(text)
 
-            tokens = self._extract_tokens(result)
-
+            # 기본 토큰 추출
+            basic_tokens = self._extract_tokens(result)
+            
             # 복합명사 추가 (중복 제거)
-            tokens_set = set(tokens)
+            final_tokens = list(basic_tokens)  # 기본 토큰 모두 포함
+            tokens_set = set(final_tokens)
+            
+            # 복합명사가 텍스트에 있으면 추가
             for compound in self.compound_nouns:
-                if compound in text:
+                if compound in text and compound not in tokens_set:
+                    final_tokens.append(compound)
                     tokens_set.add(compound)
-
-            tokens = list(tokens_set)
-
+            
             # 품질 검증
-            if self._check_quality(tokens):
-                return tokens
-
-            # 2차 시도: 필터링 강화
-            tokens = self._extract_tokens_strict(result)
-
-            # 복합명사 추가 (2차에도)
-            tokens_set = set(tokens)
-            for compound in self.compound_nouns:
-                if compound in text:
-                    tokens_set.add(compound)
-            tokens = list(tokens_set)
-
-            if self._check_quality(tokens):
-                return tokens
-
-            # 3차 시도: normalize_coda 끄고 재시도
-            result = self.kiwi.tokenize(text, normalize_coda=False)
-            tokens = self._extract_tokens_strict(result)
-
-            # 복합명사 추가 (3차에도)
-            tokens_set = set(tokens)
-            for compound in self.compound_nouns:
-                if compound in text:
-                    tokens_set.add(compound)
-            tokens = list(tokens_set)
-
-            if tokens and len(tokens) > 0:
-                return tokens
-
-            # 최종 폴백
-            return self._simple_fallback(text)
+            if self._check_quality(final_tokens):
+                return final_tokens
+            
+            # 품질 미달시에도 그대로 반환
+            return final_tokens if final_tokens else self._simple_fallback(text)
 
         except Exception as e:
             logger.error(f"토큰화 실패: {e}")
@@ -309,6 +292,8 @@ class KiwiTokenizer:
             "가능": ["되다", "수급", "자격"],
             "급여": ["수당", "금액", "돈"],
             "조건": ["자격", "요건", "기준"],
+            "깎이다": ["감액", "삭감", "감소"],  # 추가
+            "반복": ["반복수급", "재수급"],  # 추가
         }
 
         expanded = []

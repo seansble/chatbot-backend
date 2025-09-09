@@ -16,7 +16,9 @@ class RAGRetriever:
         self.use_reranker = use_reranker
         self.use_hybrid = use_hybrid
 
-        logger.info(f"✅ RAG Retriever 초기화 - Hybrid: {use_hybrid}, Reranker: {use_reranker}")
+        logger.info(
+            f"✅ RAG Retriever 초기화 - Hybrid: {use_hybrid}, Reranker: {use_reranker}"
+        )
 
     def retrieve(self, query: str, top_k: int = 5) -> List[Dict]:
         """우리 RAG 시스템으로 검색"""
@@ -25,21 +27,26 @@ class RAGRetriever:
         # 우리 하이브리드 검색 호출
         query_embedding = self.embedder.embed_query(query)
         results = self.vector_store.hybrid_search(query, query_embedding, top_k=top_k)
-        
+
         # workflow.py가 기대하는 포맷으로 변환
         formatted_results = []
         for result in results:
-            formatted_results.append({
-                "text": result["text"],
-                "score": result.get("hybrid_score", result.get("score", 0)),
-                "metadata": result.get("metadata", {}),
-                "source": result.get("source", "unknown"),
-                "bm25_score": result.get("bm25_rrf", 0),
-                "vector_score": result.get("vector_rrf", 0)
-            })
-        
+            formatted_results.append(
+                {
+                    "text": result["text"],
+                    "parent_text": result.get(
+                        "parent_text", result["text"]
+                    ),  # Parent 추가
+                    "score": result.get("hybrid_score", result.get("score", 0)),
+                    "metadata": result.get("metadata", {}),
+                    "source": result.get("source", "unknown"),
+                    "bm25_score": result.get("bm25_rrf", 0),
+                    "vector_score": result.get("vector_rrf", 0),
+                }
+            )
+
         logger.info(f"✅ {len(formatted_results)}개 문서 검색 완료")
-        
+
         return formatted_results
 
     def format_context(self, results: List[Dict]) -> str:
@@ -49,7 +56,9 @@ class RAGRetriever:
         for i, result in enumerate(results, 1):
             score = result.get("score", 0)
             context += f"[정보 {i}] (관련도: {score:.2f})\n"
-            context += f"카테고리: {result.get('metadata', {}).get('category', 'N/A')}\n"
+            context += (
+                f"카테고리: {result.get('metadata', {}).get('category', 'N/A')}\n"
+            )
             context += f"{result['text']}\n"
             context += "-" * 50 + "\n"
 
