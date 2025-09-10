@@ -164,6 +164,13 @@ class SemanticRAGWorkflow:
         """키워드 매칭 평가 개선"""
         state["debug_path"].append("simple_evaluate")
 
+        # 디버그 로깅 추가
+        logger.info(
+            f"RAG scores - rel: {state.get('relevance_score', 0):.3f}, "
+            f"overlap: {state.get('overlap_score', 0):.3f}, "
+            f"hit: {state.get('hit_ratio', 0):.3f}"
+        )
+
         # Kiwi 토크나이저 사용
         try:
             from ..tokenizer import KiwiTokenizer
@@ -210,17 +217,24 @@ class SemanticRAGWorkflow:
         else:
             state["overlap_score"] = 0.0
 
-        # 라우팅 결정 (임계값 대폭 완화)
+        # 직접 답변 가능 체크
         if (
-            state["hit_ratio"] < 0.1  # 0.2 → 0.1
-            or state["overlap_score"] < 0.2  # 0.3 → 0.2
-            or state["relevance_score"] < 0.05  # 0.1 → 0.05
+            state.get("relevance_score", 0) > 0.15
+            and state.get("documents")
+            and "answer" in state["documents"][0]
         ):
-            state["mode"] = "llm_only"
-            state["citation"] = ""  # 근거 없음 표시 제거
-        else:
             state["mode"] = "rag_lite"
-            state["citation"] = ""  # 근거 표시 제거
+            logger.info("Direct answer available in document")
+        elif (
+            state["hit_ratio"] >= 0.1
+            or state["overlap_score"] >= 0.2
+            or state["relevance_score"] >= 0.05
+        ):
+            state["mode"] = "rag_lite"
+        else:
+            state["mode"] = "llm_only"
+
+        state["citation"] = ""  # 근거 표시 제거
 
         logger.info(
             f"Evaluation - hit_ratio: {state['hit_ratio']:.2f}, "
@@ -271,6 +285,7 @@ class SemanticRAGWorkflow:
                 messages=messages,
                 temperature=config.MODEL_TEMPERATURE,
                 max_tokens=400,
+                timeout=10,
             )
 
             state["raw_answer"] = completion.choices[0].message.content
@@ -283,9 +298,47 @@ class SemanticRAGWorkflow:
 
         return state
 
+    def truncate_safely(self, text: str, max_len: int = 1000) -> str:
+        """문장 단위로 안전하게 자르기"""
+        if len(text) <= max_len:
+            return text
+
+        # 문장 단위로 분리
+        sentences = text.split(". ")
+        result = []
+        current_len = 0
+
+        for sent in sentences:
+            if current_len + len(sent) + 2 <= max_len:
+                result.append(sent)
+                current_len += len(sent) + 2
+            else:
+                break
+
+        return ". ".join(result) + "." if result else text[:max_len]
+
     def generate_rag_lite(self, state: RAGState) -> RAGState:
         """RAG lite 모드 - 개선된 프롬프트"""
         state["debug_path"].append("generate_rag_lite")
+
+        # 1. 직접 답변 우선 (LLM 우회)
+        if state["documents"] and state["relevance_score"] > 0.15:
+            doc = state["documents"][0]
+            if "answer" in doc:
+                state["raw_answer"] = doc["answer"]
+                state["confidence"] = 0.95
+                logger.info("Using direct answer from document")
+                return state
+
+        # 2. Context 안전하게 자르기
+        context = self.truncate_safely(state.get("context", ""), 1000)
+
+        # 3. RAG 품질 판단
+        high_quality = (
+            state.get("relevance_score", 0) > 0.1
+            and state.get("overlap_score", 0) > 0.2
+            and len(context) > 100
+        )
 
         try:
             from openai import OpenAI
@@ -296,36 +349,77 @@ class SemanticRAGWorkflow:
                 api_key=config.OPENROUTER_API_KEY,
             )
 
-            # 구조화된 프롬프트
-            user_prompt = f"""[검색된 관련 정보]
-{state['context']}
+            if high_quality:
+                # RAG 충분: 정보 기반 답변
+                user_prompt = f"""[검색 정보]
+{context}
 
-[사용자 질문]
+[질문]
 {state['query']}
 
-위 검색 정보를 참고하여 질문에 답변하세요.
-정보를 그대로 복사하지 말고, 이해하고 재구성하여 자연스럽게 설명하세요.
-검색 정보에 없는 내용은 추가하지 마세요."""
+[역할: 정보 보완 전문가]
+1. 검색 정보를 기반으로 답변
+2. 빠진 부분만 "일반적으로"로 보완
+3. 400자 내외
+
+답변:"""
+                system_msg = "실업급여 상담사. 검색 정보 기반 답변."
+                temp = 0.1
+
+            else:
+                # RAG 부족: 전문가 모드
+                user_prompt = f"""[질문]
+{state['query']}
+
+[참고정보]
+{context[:500] if context else "없음"}
+
+[2025년 핵심정책]
+- 상한: 66,000원, 하한: 64,192원
+- 조건: 18개월 중 180일
+- 신청: 퇴사 후 1년내
+
+전문가로서 정확히 답변:"""
+                system_msg = "실업급여 전문가. 2025년 기준."
+                temp = 0.2
 
             messages = [
-                {"role": "system", "content": self.SYSTEM_PROMPT_RAG},
+                {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_prompt},
             ]
 
             completion = client.chat.completions.create(
                 model=config.MODEL,
                 messages=messages,
-                temperature=config.MODEL_TEMPERATURE,  # 0.1로 낮춤
+                temperature=temp,
                 max_tokens=400,
+                timeout=10,
             )
 
             state["raw_answer"] = completion.choices[0].message.content
-            state["confidence"] = 0.85
+            state["confidence"] = 0.9 if high_quality else 0.7
 
         except Exception as e:
             logger.error(f"RAG generation failed: {e}")
-            # 폴백: context 요약
-            state["raw_answer"] = state.get("context", "정보를 찾을 수 없습니다.")[:400]
+            # 폴백: 여러 시도
+            if state["documents"]:
+                doc = state["documents"][0]
+                # 1. answer 필드
+                if "answer" in doc:
+                    state["raw_answer"] = doc["answer"]
+                # 2. parent_text에서 추출
+                elif "parent_text" in doc and "A:" in doc["parent_text"]:
+                    text = doc["parent_text"]
+                    answer_part = text.split("A:")[1].strip()
+                    state["raw_answer"] = answer_part[:400]
+                # 3. text 사용
+                else:
+                    state["raw_answer"] = doc.get("text", "정보를 찾을 수 없습니다.")[
+                        :400
+                    ]
+            else:
+                state["raw_answer"] = "죄송합니다. 답변 생성 중 오류가 발생했습니다."
+
             state["confidence"] = 0.5
 
         return state
