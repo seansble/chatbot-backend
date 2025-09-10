@@ -275,20 +275,49 @@ class SemanticRAGWorkflow:
                 api_key=config.OPENROUTER_API_KEY,
             )
 
+            # 결론 우선 프롬프트
+            user_prompt = f"""질문: {state['query']}
+
+[답변 작성 규칙]
+1. 첫 문장: 핵심 답변 (가능/불가능/금액)
+2. 둘째 문장: 주요 조건이나 근거
+3. 셋째 문장: 주의사항
+4. 반드시 400자 이내로 완결
+
+답변:"""
+
             messages = [
-                {"role": "system", "content": self.SYSTEM_PROMPT_BASE},
-                {"role": "user", "content": f"질문: {state['query']}"},
+                {"role": "system", "content": "실업급여 전문가. 간결하고 명확하게."},
+                {"role": "user", "content": user_prompt},
             ]
 
             completion = client.chat.completions.create(
                 model=config.MODEL,
                 messages=messages,
                 temperature=config.MODEL_TEMPERATURE,
-                max_tokens=400,
+                max_tokens=300,
+                stop=["\n\n\n", "이상입니다", "참고하세요"],
                 timeout=10,
             )
 
-            state["raw_answer"] = completion.choices[0].message.content
+            raw_answer = completion.choices[0].message.content
+
+            # 강제 길이 제한
+            if len(raw_answer) > 400:
+                sentences = raw_answer.split(". ")
+                result = []
+                current_len = 0
+                for sent in sentences:
+                    if current_len + len(sent) < 380:
+                        result.append(sent)
+                        current_len += len(sent)
+                    else:
+                        break
+                raw_answer = ". ".join(result)
+                if not raw_answer.endswith("."):
+                    raw_answer += "."
+
+            state["raw_answer"] = raw_answer
             state["confidence"] = 0.7
 
         except Exception as e:
@@ -318,7 +347,7 @@ class SemanticRAGWorkflow:
         return ". ".join(result) + "." if result else text[:max_len]
 
     def generate_rag_lite(self, state: RAGState) -> RAGState:
-        """RAG lite 모드 - 개선된 프롬프트"""
+        """RAG lite 모드 - 결론 우선 답변"""
         state["debug_path"].append("generate_rag_lite")
 
         # 1. 직접 답변 우선 (LLM 우회)
@@ -330,8 +359,8 @@ class SemanticRAGWorkflow:
                 logger.info("Using direct answer from document")
                 return state
 
-        # 2. Context 안전하게 자르기
-        context = self.truncate_safely(state.get("context", ""), 1000)
+        # 2. Context 크기 조정 (출력 400토큰 확보)
+        context = self.truncate_safely(state.get("context", ""), 300)
 
         # 3. RAG 품질 판단
         high_quality = (
@@ -350,37 +379,36 @@ class SemanticRAGWorkflow:
             )
 
             if high_quality:
-                # RAG 충분: 정보 기반 답변
-                user_prompt = f"""[검색 정보]
-{context}
+                # RAG 충분: 결론 우선 답변
+                user_prompt = f"""참고: {context}
 
-[질문]
-{state['query']}
+질문: {state['query']}
 
-[역할: 정보 보완 전문가]
-1. 검색 정보를 기반으로 답변
-2. 빠진 부분만 "일반적으로"로 보완
-3. 400자 내외
+[답변 규칙]
+1줄: 결론 (가능/불가능/금액)
+2줄: 핵심 근거 2개
+3줄: 주의사항
+전체 400자 이내 필수
 
 답변:"""
-                system_msg = "실업급여 상담사. 검색 정보 기반 답변."
+                system_msg = "실업급여 상담사. 결론부터 명확히."
                 temp = 0.1
 
             else:
                 # RAG 부족: 전문가 모드
-                user_prompt = f"""[질문]
-{state['query']}
+                user_prompt = f"""질문: {state['query']}
 
-[참고정보]
-{context[:500] if context else "없음"}
-
-[2025년 핵심정책]
+[2025년 기준]
 - 상한: 66,000원, 하한: 64,192원
 - 조건: 18개월 중 180일
-- 신청: 퇴사 후 1년내
 
-전문가로서 정확히 답변:"""
-                system_msg = "실업급여 전문가. 2025년 기준."
+[답변 규칙]
+1줄: 명확한 답변
+2줄: 근거
+전체 300자 이내
+
+답변:"""
+                system_msg = "실업급여 전문가. 간결하게."
                 temp = 0.2
 
             messages = [
@@ -392,11 +420,34 @@ class SemanticRAGWorkflow:
                 model=config.MODEL,
                 messages=messages,
                 temperature=temp,
-                max_tokens=400,
+                max_tokens=300,  # 출력 토큰 제한
+                stop=["\n\n\n", "이상입니다", "참고하세요", "감사합니다"],
                 timeout=10,
             )
 
-            state["raw_answer"] = completion.choices[0].message.content
+            raw_answer = completion.choices[0].message.content
+
+            # 강제 길이 제한 (문장 단위)
+            if len(raw_answer) > 400:
+                sentences = raw_answer.split(". ")
+                result = []
+                current_len = 0
+
+                for sent in sentences:
+                    if current_len + len(sent) < 380:  # 여유 20자
+                        result.append(sent)
+                        current_len += len(sent)
+                    else:
+                        # 마지막 문장으로 마무리
+                        if current_len < 300:  # 너무 짧으면
+                            result.append(sent[:50] + "...")
+                        break
+
+                raw_answer = ". ".join(result)
+                if not raw_answer.endswith("."):
+                    raw_answer += "."
+
+            state["raw_answer"] = raw_answer
             state["confidence"] = 0.9 if high_quality else 0.7
 
         except Exception as e:
@@ -439,9 +490,19 @@ class SemanticRAGWorkflow:
         except:
             pass
 
-        # 길이 체크
-        if len(answer) > 500:
-            answer = answer[:497] + "..."
+        # 최종 길이 체크 (400자)
+        if len(answer) > 400:
+            # 마지막 온전한 문장까지만
+            sentences = answer.split(". ")
+            result = []
+            length = 0
+            for sent in sentences:
+                if length + len(sent) <= 380:
+                    result.append(sent)
+                    length += len(sent)
+                else:
+                    break
+            answer = ". ".join(result) + "."
 
         # citation 제거 (근거: 없음 안 붙임)
         state["final_answer"] = answer

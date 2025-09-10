@@ -434,16 +434,40 @@ def get_user_keys(request, fingerprint):
     return keys
 
 
+# backend/app.py의 is_unemployment_related 함수 수정 (약 1020번째 줄)
+
 def is_unemployment_related(question):
-    """실업급여 관련 질문인지 체크"""
+    """실업급여 관련 질문인지 체크 - 더 포괄적으로 수정"""
+    
+    # 방법 1: config의 확장된 키워드 사용
     keywords = config.UNEMPLOYMENT_KEYWORDS
     question_lower = question.lower()
-
+    
     for keyword in keywords:
         if keyword in question_lower:
             return True
-
-    return False
+    
+    # 방법 2: 추가 패턴 체크
+    patterns = [
+        r'\d+개월',  # 숫자+개월
+        r'\d+일',    # 숫자+일
+        r'\d+만원',  # 금액
+        r'주\d+일',  # 주5일, 주6일 등
+    ]
+    
+    import re
+    for pattern in patterns:
+        if re.search(pattern, question_lower):
+            return True
+    
+    # 방법 3: 실업급여 챗봇이니까 거의 모든 질문 허용
+    # 명백히 관련 없는 것만 제외
+    unrelated = ['날씨', '주식', '비트코인', '게임', '연예인', '요리']
+    if any(word in question_lower for word in unrelated):
+        return False
+    
+    # 기본적으로 허용
+    return True
 
 
 def check_malicious_input(text):
