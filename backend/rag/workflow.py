@@ -1,9 +1,15 @@
-﻿"""단순화된 RAG 워크플로우 - LLM 우선, RAG 보조"""
+﻿# backend/rag/workflow.py
+"""통합 RAG 워크플로우 - 프롬프트 내장"""
 
 from typing import Dict, List, TypedDict, Optional, Any
 from langgraph.graph import StateGraph, END
 import logging
 import re
+import sys
+from pathlib import Path
+
+# config import를 위한 경로 추가
+sys.path.append(str(Path(__file__).parent.parent))
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +42,40 @@ class RAGState(TypedDict):
 
 
 class SemanticRAGWorkflow:
+    """통합 RAG 워크플로우"""
+
+    # 시스템 프롬프트 통합
+    SYSTEM_PROMPT_BASE = """당신은 한국 실업급여 전문 상담사입니다.
+
+[2025년 확정 정보]
+- 일 상한액: 66,000원 (절대 69,000원 아님)
+- 일 하한액: 64,192원
+- 가입조건: 18개월 중 180일 이상
+- 지급률: 평균임금의 60%
+
+[답변 스타일]
+- 결론부터 명확히 (가능/불가능)
+- 핵심은 **볼드체** 강조
+- 친근한 어투로 자연스럽게
+- 400자 내외
+- 확실하지 않으면 "~로 알려져 있습니다" 표현"""
+
+    SYSTEM_PROMPT_RAG = """당신은 한국 실업급여 전문 상담사입니다.
+
+[검색 정보 활용 원칙]
+1. 제공된 정보를 이해하고 분석하여 답변
+2. Parent-Child 구조의 Q&A를 참고하여 맥락 파악
+3. 검색 결과를 재구성하여 자연스럽게 설명
+4. 여러 정보를 종합하여 포괄적 답변
+5. 검색 정보에 없는 내용은 추가하지 않기
+
+[답변 스타일]
+- 단순 복붙 금지
+- 질문에 맞게 정보 재구성
+- 핵심은 **볼드체** 강조
+- 친근한 어투
+- 400자 내외"""
+
     def __init__(self, retriever):
         self.retriever = retriever
         self.workflow = self._build_workflow()
@@ -57,7 +97,7 @@ class SemanticRAGWorkflow:
         workflow.add_edge("analyze_query", "rag_search")
         workflow.add_edge("rag_search", "simple_evaluate")
 
-        # 단순 라우팅
+        # 라우팅
         workflow.add_conditional_edges(
             "simple_evaluate",
             self.route_by_mode,
@@ -108,9 +148,12 @@ class SemanticRAGWorkflow:
         state["relevance_score"] = results[0]["score"] if results else 0.0
 
         # Parent-Child: parent_text 우선 사용
-        state["context"] = "\n".join(
-            [doc.get("parent_text", doc["text"]) for doc in results[:2]]
-        )  # 상위 2개만
+        context_parts = []
+        for i, doc in enumerate(results[:2], 1):
+            parent = doc.get("parent_text", doc["text"])
+            context_parts.append(f"[정보 {i}]\n{parent}")
+
+        state["context"] = "\n\n".join(context_parts)
 
         logger.info(
             f"Retrieved {len(results)} documents, top score: {state['relevance_score']:.3f}"
@@ -118,19 +161,40 @@ class SemanticRAGWorkflow:
         return state
 
     def simple_evaluate(self, state: RAGState) -> RAGState:
-        """단순 키워드 매칭 평가"""
+        """키워드 매칭 평가 개선"""
         state["debug_path"].append("simple_evaluate")
 
-        # 질문과 문서의 키워드 겹침 계산
-        query_tokens = set(state["processed_query"].lower().split())
-        context_tokens = set(state.get("context", "").lower().split())
+        # Kiwi 토크나이저 사용
+        try:
+            from ..tokenizer import KiwiTokenizer
+
+            tokenizer = KiwiTokenizer()
+            query_tokens = set(tokenizer.tokenize(state["processed_query"]))
+            context_tokens = set(tokenizer.tokenize(state.get("context", "")))
+        except:
+            # 폴백: 단순 split
+            query_tokens = set(state["processed_query"].lower().split())
+            context_tokens = set(state.get("context", "").lower().split())
 
         # 중요 키워드 체크
-        important_keywords = {"실업급여", "권고사직", "자격", "금액", "기간", "조건"}
+        important_keywords = {
+            "실업급여",
+            "권고사직",
+            "자격",
+            "금액",
+            "기간",
+            "조건",
+            "반복수급",
+            "조기재취업",
+            "구직활동",
+            "180일",
+            "하한액",
+            "상한액",
+        }
         query_important = query_tokens & important_keywords
         context_important = context_tokens & important_keywords
 
-        # hit_ratio: 중요 키워드 몇 개가 매칭되는가
+        # hit_ratio 계산
         if query_important:
             state["hit_ratio"] = len(query_important & context_important) / len(
                 query_important
@@ -138,7 +202,7 @@ class SemanticRAGWorkflow:
         else:
             state["hit_ratio"] = 0.0
 
-        # overlap_score: 전체 토큰 겹침 비율
+        # overlap_score 계산
         if query_tokens:
             state["overlap_score"] = len(query_tokens & context_tokens) / len(
                 query_tokens
@@ -146,21 +210,23 @@ class SemanticRAGWorkflow:
         else:
             state["overlap_score"] = 0.0
 
-        # 라우팅 결정
+        # 라우팅 결정 (임계값 대폭 완화)
         if (
-            state["hit_ratio"] < 0.2
-            or state["overlap_score"] < 0.3
-            or state["relevance_score"] < 0.1
+            state["hit_ratio"] < 0.1  # 0.2 → 0.1
+            or state["overlap_score"] < 0.2  # 0.3 → 0.2
+            or state["relevance_score"] < 0.05  # 0.1 → 0.05
         ):
             state["mode"] = "llm_only"
-            state["citation"] = "근거: 없음"
+            state["citation"] = ""  # 근거 없음 표시 제거
         else:
             state["mode"] = "rag_lite"
-            state["citation"] = f"근거: 검색결과 {len(state['documents'])}건"
+            state["citation"] = ""  # 근거 표시 제거
 
         logger.info(
             f"Evaluation - hit_ratio: {state['hit_ratio']:.2f}, "
-            f"overlap: {state['overlap_score']:.2f}, mode: {state['mode']}"
+            f"overlap: {state['overlap_score']:.2f}, "
+            f"relevance: {state['relevance_score']:.3f}, "
+            f"mode: {state['mode']}"
         )
         return state
 
@@ -169,7 +235,7 @@ class SemanticRAGWorkflow:
         return state["mode"]
 
     def generate_llm_only(self, state: RAGState) -> RAGState:
-        """LLM only 모드 - RAG 없이 생성"""
+        """LLM only 모드"""
         state["debug_path"].append("generate_llm_only")
 
         # FALLBACK_ANSWERS 체크
@@ -195,23 +261,15 @@ class SemanticRAGWorkflow:
                 api_key=config.OPENROUTER_API_KEY,
             )
 
-            user_prompt = f"""질문: {state['query']}
-
-답변 방식:
-- 결론부터 명확히 (가능/불가능)
-- 핵심 정보는 **볼드체** 강조
-- 친근한 말투로 각 문맥이 자연스럽게 이어지게
-- 400자 내외로 끝이 끊기지 않게  
-
-주의: 확실하지 않으면 "~로 알려져 있습니다" 표현"""
+            messages = [
+                {"role": "system", "content": self.SYSTEM_PROMPT_BASE},
+                {"role": "user", "content": f"질문: {state['query']}"},
+            ]
 
             completion = client.chat.completions.create(
                 model=config.MODEL,
-                messages=[
-                    {"role": "system", "content": config.LLM_ONLY_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.2,
+                messages=messages,
+                temperature=config.MODEL_TEMPERATURE,
                 max_tokens=400,
             )
 
@@ -226,7 +284,7 @@ class SemanticRAGWorkflow:
         return state
 
     def generate_rag_lite(self, state: RAGState) -> RAGState:
-        """RAG lite 모드 - RAG 정보 활용"""
+        """RAG lite 모드 - 개선된 프롬프트"""
         state["debug_path"].append("generate_rag_lite")
 
         try:
@@ -238,26 +296,26 @@ class SemanticRAGWorkflow:
                 api_key=config.OPENROUTER_API_KEY,
             )
 
-            user_prompt = f"""[검색 정보]
+            # 구조화된 프롬프트
+            user_prompt = f"""[검색된 관련 정보]
 {state['context']}
 
-질문: {state['query']}
+[사용자 질문]
+{state['query']}
 
-답변 방식:
-- 검색 정보 기반으로 결론 먼저
-- 부족한 부분만 간단히 보충
-- 핵심은 **볼드체**
-- 400자 내외
+위 검색 정보를 참고하여 질문에 답변하세요.
+정보를 그대로 복사하지 말고, 이해하고 재구성하여 자연스럽게 설명하세요.
+검색 정보에 없는 내용은 추가하지 마세요."""
 
-규칙: 검색 정보에 없는 내용 추가 금지"""
+            messages = [
+                {"role": "system", "content": self.SYSTEM_PROMPT_RAG},
+                {"role": "user", "content": user_prompt},
+            ]
 
             completion = client.chat.completions.create(
                 model=config.MODEL,
-                messages=[
-                    {"role": "system", "content": config.RAG_LITE_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.1,  # RAG 모드는 더 낮게
+                messages=messages,
+                temperature=config.MODEL_TEMPERATURE,  # 0.1로 낮춤
                 max_tokens=400,
             )
 
@@ -266,14 +324,14 @@ class SemanticRAGWorkflow:
 
         except Exception as e:
             logger.error(f"RAG generation failed: {e}")
-            # 폴백으로 RAG 문서 그대로 사용
+            # 폴백: context 요약
             state["raw_answer"] = state.get("context", "정보를 찾을 수 없습니다.")[:400]
             state["confidence"] = 0.5
 
         return state
 
     def format_final(self, state: RAGState) -> RAGState:
-        """최종 포맷팅 및 후처리"""
+        """최종 포맷팅"""
         state["debug_path"].append("format_final")
 
         answer = state.get("raw_answer", "관련 정보를 찾을 수 없습니다.")
@@ -291,9 +349,7 @@ class SemanticRAGWorkflow:
         if len(answer) > 500:
             answer = answer[:497] + "..."
 
-        # 근거 추가
-        answer = f"{answer}\n\n{state.get('citation', '근거: 없음')}"
-
+        # citation 제거 (근거: 없음 안 붙임)
         state["final_answer"] = answer
 
         logger.info(f"Workflow complete: {' → '.join(state['debug_path'])}")
@@ -323,12 +379,13 @@ class SemanticRAGWorkflow:
             "answer": result.get("final_answer", ""),
             "confidence": result.get("confidence", 0.0),
             "method": result.get("mode", "unknown"),
-            "coverage_score": result.get("overlap_score", 0.0),  # 호환성 유지
+            "coverage_score": result.get("overlap_score", 0.0),
             "documents": result.get("documents", []),
             "debug": {
                 "path": result.get("debug_path", []),
                 "hit_ratio": result.get("hit_ratio", 0.0),
                 "overlap_score": result.get("overlap_score", 0.0),
+                "relevance_score": result.get("relevance_score", 0.0),
             },
         }
 
