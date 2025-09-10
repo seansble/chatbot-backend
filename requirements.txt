@@ -11,7 +11,7 @@ requests==2.32.3
 qdrant-client==1.15.0
 rank-bm25==0.2.2
 langgraph==0.2.0
-torch==2.4.0
+torch==2.1.2
 transformers==4.35.0
 sentence-transformers==2.2.2
 tqdm==4.66.1
