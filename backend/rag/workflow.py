@@ -347,27 +347,21 @@ class SemanticRAGWorkflow:
         return ". ".join(result) + "." if result else text[:max_len]
 
     def generate_rag_lite(self, state: RAGState) -> RAGState:
-        """RAG lite 모드 - 결론 우선 답변"""
+        """RAG lite 모드 - 정보 보완 전문가"""
         state["debug_path"].append("generate_rag_lite")
 
-        # 1. 직접 답변 우선 (LLM 우회)
-        if state["documents"] and state["relevance_score"] > 0.15:
+        # RAG 품질 판단
+        high_confidence = state.get("relevance_score", 0) > 0.12
+
+        # 기본 정보 추출
+        base_answer = ""
+        if state["documents"]:
             doc = state["documents"][0]
-            if "answer" in doc:
-                state["raw_answer"] = doc["answer"]
-                state["confidence"] = 0.95
-                logger.info("Using direct answer from document")
-                return state
+            base_answer = doc.get("answer", "")
+            parent_text = doc.get("parent_text", "")
 
-        # 2. Context 크기 조정 (출력 400토큰 확보)
-        context = self.truncate_safely(state.get("context", ""), 300)
-
-        # 3. RAG 품질 판단
-        high_quality = (
-            state.get("relevance_score", 0) > 0.1
-            and state.get("overlap_score", 0) > 0.2
-            and len(context) > 100
-        )
+        # Context 준비
+        context = self.truncate_safely(state.get("context", ""), 400)
 
         try:
             from openai import OpenAI
@@ -378,38 +372,51 @@ class SemanticRAGWorkflow:
                 api_key=config.OPENROUTER_API_KEY,
             )
 
-            if high_quality:
-                # RAG 충분: 결론 우선 답변
-                user_prompt = f"""참고: {context}
+            if high_confidence and base_answer:
+                # 높은 품질: 정보 보완자 역할
+                user_prompt = f"""[핵심 정보 - 정확함]
+    {base_answer}
 
-질문: {state['query']}
+    [추가 컨텍스트]
+    {parent_text if parent_text else context}
 
-[답변 규칙]
-1줄: 결론 (가능/불가능/금액)
-2줄: 핵심 근거 2개
-3줄: 주의사항
-전체 400자 이내 필수
+    [사용자 질문]
+    {state['query']}
 
-답변:"""
-                system_msg = "실업급여 상담사. 결론부터 명확히."
-                temp = 0.1
+    [당신의 역할: 정보 보완 전문가]
+    1. 핵심 정보는 100% 정확하므로 그대로 사용
+    2. 질문의 맥락에 맞게 자연스럽게 설명 추가
+    3. 부족한 부분만 보충하되 각 문장이 자연스럽게 이어지게 해줘
+    4. 400자 이내로 완성 
+
+    답변:"""
+                system_msg = (
+                    "실업급여 전문 상담사. 제공된 핵심 정보를 바탕으로 친절하게 설명."
+                )
+                temp = 0.2
 
             else:
-                # RAG 부족: 전문가 모드
-                user_prompt = f"""질문: {state['query']}
+                # 낮은 품질: 참고만 하고 전문가 답변
+                user_prompt = f"""[참고 정보 - 신뢰도 낮음]
+    {context}
 
-[2025년 기준]
-- 상한: 66,000원, 하한: 64,192원
-- 조건: 18개월 중 180일
+    [질문]
+    {state['query']}
 
-[답변 규칙]
-1줄: 명확한 답변
-2줄: 근거
-전체 300자 이내
+    [당신의 역할: 실업급여 전문가]
+    1. 주어진 질문의 맥락에 맞게 자연스럽게 설명
+    2. 각 문장이 자연스럽게 이어지게 해주되 간결하게
+    3. 400자 이내로 완성
 
-답변:"""
-                system_msg = "실업급여 전문가. 간결하게."
-                temp = 0.2
+    [2025년 정확한 정보]
+    - 반복수급: 3회 10%, 4회 25%, 5회 40%, 6회 이상 50%
+    - 구직활동: 4주마다 1회 이상
+    - 상한액: 66,000원, 하한액: 64,192원
+    - 조건: 18개월 중 180일
+
+    전문가로서 정확한 답변:"""
+                system_msg = "실업급여 전문가. 2025년 최신 정보로 정확히."
+                temp = 0.3
 
             messages = [
                 {"role": "system", "content": system_msg},
@@ -420,57 +427,38 @@ class SemanticRAGWorkflow:
                 model=config.MODEL,
                 messages=messages,
                 temperature=temp,
-                max_tokens=300,  # 출력 토큰 제한
-                stop=["\n\n\n", "이상입니다", "참고하세요", "감사합니다"],
-                timeout=10,
+                max_tokens=300,
+                stop=["\n\n\n", "이상입니다"],
+                timeout=15,
             )
 
             raw_answer = completion.choices[0].message.content
 
-            # 강제 길이 제한 (문장 단위)
+            # 길이 체크
             if len(raw_answer) > 400:
                 sentences = raw_answer.split(". ")
                 result = []
                 current_len = 0
-
                 for sent in sentences:
-                    if current_len + len(sent) < 380:  # 여유 20자
+                    if current_len + len(sent) < 380:
                         result.append(sent)
                         current_len += len(sent)
                     else:
-                        # 마지막 문장으로 마무리
-                        if current_len < 300:  # 너무 짧으면
-                            result.append(sent[:50] + "...")
                         break
-
-                raw_answer = ". ".join(result)
-                if not raw_answer.endswith("."):
-                    raw_answer += "."
+                raw_answer = ". ".join(result) + "."
 
             state["raw_answer"] = raw_answer
-            state["confidence"] = 0.9 if high_quality else 0.7
+            state["confidence"] = 0.9 if high_confidence else 0.7
 
         except Exception as e:
             logger.error(f"RAG generation failed: {e}")
-            # 폴백: 여러 시도
-            if state["documents"]:
-                doc = state["documents"][0]
-                # 1. answer 필드
-                if "answer" in doc:
-                    state["raw_answer"] = doc["answer"]
-                # 2. parent_text에서 추출
-                elif "parent_text" in doc and "A:" in doc["parent_text"]:
-                    text = doc["parent_text"]
-                    answer_part = text.split("A:")[1].strip()
-                    state["raw_answer"] = answer_part[:400]
-                # 3. text 사용
-                else:
-                    state["raw_answer"] = doc.get("text", "정보를 찾을 수 없습니다.")[
-                        :400
-                    ]
+            # 폴백: 직접 답변 사용
+            if base_answer:
+                state["raw_answer"] = (
+                    f"{base_answer}\n\n자세한 내용은 고용센터 1350으로 문의하세요."
+                )
             else:
-                state["raw_answer"] = "죄송합니다. 답변 생성 중 오류가 발생했습니다."
-
+                state["raw_answer"] = "답변 생성 중 오류가 발생했습니다."
             state["confidence"] = 0.5
 
         return state
