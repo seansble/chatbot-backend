@@ -437,37 +437,53 @@ def get_user_keys(request, fingerprint):
 # backend/app.py의 is_unemployment_related 함수 수정 (약 1020번째 줄)
 
 def is_unemployment_related(question):
-    """실업급여 관련 질문인지 체크 - 더 포괄적으로 수정"""
+    """실업급여 관련 질문인지 엄격하게 체크"""
     
-    # 방법 1: config의 확장된 키워드 사용
-    keywords = config.UNEMPLOYMENT_KEYWORDS
     question_lower = question.lower()
     
-    for keyword in keywords:
-        if keyword in question_lower:
-            return True
-    
-    # 방법 2: 추가 패턴 체크
-    patterns = [
-        r'\d+개월',  # 숫자+개월
-        r'\d+일',    # 숫자+일
-        r'\d+만원',  # 금액
-        r'주\d+일',  # 주5일, 주6일 등
+    # 차단 키워드 (무조건 차단)
+    BLOCK_KEYWORDS = [
+        '주택관리사', '인강', '자격증', '시험', '강의',
+        '비트코인', '주식', '부동산', '대출', '펀드',
+        '다이어트', '운동', '요리', '레시피', '여행',
+        '게임', '영화', '드라마', '날씨', '뉴스',
+        'ai', '인공지능', '챗봇', '프로그래밍', '코딩',
+        '맛집', '카페', '쇼핑', '패션', '뷰티'
     ]
     
+    # 인사말도 차단
+    GREETINGS = ['안녕', '하이', 'hello', 'hi', '뭐해', '뭐하니', '반가워']
+    
+    # 차단 키워드 체크
+    for keyword in BLOCK_KEYWORDS:
+        if keyword in question_lower:
+            return False
+    
+    # 인사말 체크
+    if len(question_lower) < 10:  # 짧은 문장
+        for greeting in GREETINGS:
+            if greeting in question_lower:
+                return False
+    
+    # 필수 키워드 (최소 하나는 포함해야 함)
+    REQUIRED_KEYWORDS = [
+        '실업', '급여', '퇴사', '퇴직', '해고', '권고사직',
+        '고용보험', '수급', '구직', '실직', '일했', '근무',
+        '월급', '연봉', '계약만료', '이직', '회사', '직장',
+        '프리랜서', '계약직', '정규직', '근로', '퇴직금',
+        '상한액', '하한액', '수당', '일당', '일급',
+        '180일', '6개월', '18개월', '반복수급', '구직활동'
+    ]
+    
+    # 필수 키워드 체크
+    has_required = any(keyword in question_lower for keyword in REQUIRED_KEYWORDS)
+    
+    # 숫자+근무 패턴 (예: "8개월 일했어요")
     import re
-    for pattern in patterns:
-        if re.search(pattern, question_lower):
-            return True
+    has_work_pattern = bool(re.search(r'\d+\s*(개월|년|만\s*원|만원|일|살)', question_lower))
     
-    # 방법 3: 실업급여 챗봇이니까 거의 모든 질문 허용
-    # 명백히 관련 없는 것만 제외
-    unrelated = ['날씨', '주식', '비트코인', '게임', '연예인', '요리']
-    if any(word in question_lower for word in unrelated):
-        return False
-    
-    # 기본적으로 허용
-    return True
+    # 필수 키워드가 있거나 근무 패턴이 있어야만 통과
+    return has_required or has_work_pattern  # 둘 중 하나라도 있어야 True
 
 
 def check_malicious_input(text):
