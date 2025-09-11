@@ -1,5 +1,5 @@
 ﻿# backend/rag/workflow.py
-"""통합 RAG 워크플로우 - 프롬프트 내장"""
+"""통합 RAG 워크플로우 - 2단계 처리 통합"""
 
 from typing import Dict, List, TypedDict, Optional, Any
 from langgraph.graph import StateGraph, END
@@ -11,6 +11,9 @@ from pathlib import Path
 # config import를 위한 경로 추가
 sys.path.append(str(Path(__file__).parent.parent))
 
+# unemployment_logic import
+from .unemployment_logic import unemployment_logic
+
 logger = logging.getLogger(__name__)
 
 
@@ -20,6 +23,11 @@ class RAGState(TypedDict):
     # 입력
     query: str
     processed_query: str
+    is_complex: bool  # 복잡한 질문 여부
+
+    # 변수 추출 (새로 추가)
+    extracted_variables: Dict[str, Any]
+    calculation_result: Dict[str, Any]
 
     # 검색
     documents: List[Dict]
@@ -29,7 +37,7 @@ class RAGState(TypedDict):
     # 평가
     hit_ratio: float
     overlap_score: float
-    mode: str  # "llm_only" or "rag_lite"
+    mode: str  # "llm_only", "rag_lite", "two_stage"
 
     # 답변 생성
     raw_answer: str
@@ -76,6 +84,21 @@ class SemanticRAGWorkflow:
 - 친근한 어투
 - 400자 내외"""
 
+    SYSTEM_PROMPT_FINAL = """당신은 친절한 실업급여 상담사입니다.
+
+[역할]
+이미 계산된 결과를 자연스럽고 친근하게 설명하기
+추가 계산 절대 금지 (이미 완료됨)
+제공된 숫자 그대로 사용
+
+[답변 구조]
+1. 핵심 답변 (가능/불가능, 금액)
+2. 주요 조건 설명
+3. 필요시 주의사항
+4. 마무리 안내
+
+400자 이내, 친근한 존댓말"""
+
     def __init__(self, retriever):
         self.retriever = retriever
         self.workflow = self._build_workflow()
@@ -86,15 +109,32 @@ class SemanticRAGWorkflow:
 
         # 노드 정의
         workflow.add_node("analyze_query", self.analyze_query)
+        workflow.add_node("check_complexity", self.check_complexity)  # 새로 추가
+        workflow.add_node("extract_variables", self.extract_variables)  # 새로 추가
+        workflow.add_node("calculate_benefit", self.calculate_benefit)  # 새로 추가
         workflow.add_node("rag_search", self.rag_search)
         workflow.add_node("simple_evaluate", self.simple_evaluate)
         workflow.add_node("generate_llm_only", self.generate_llm_only)
         workflow.add_node("generate_rag_lite", self.generate_rag_lite)
+        workflow.add_node("generate_two_stage", self.generate_two_stage)  # 새로 추가
         workflow.add_node("format_final", self.format_final)
 
         # 엣지 정의
         workflow.set_entry_point("analyze_query")
-        workflow.add_edge("analyze_query", "rag_search")
+        workflow.add_edge("analyze_query", "check_complexity")
+
+        # 복잡도에 따른 분기
+        workflow.add_conditional_edges(
+            "check_complexity",
+            self.route_by_complexity,
+            {"simple": "rag_search", "complex": "extract_variables"},
+        )
+
+        # 복잡한 질문 처리 흐름
+        workflow.add_edge("extract_variables", "calculate_benefit")
+        workflow.add_edge("calculate_benefit", "rag_search")
+
+        # 기존 흐름
         workflow.add_edge("rag_search", "simple_evaluate")
 
         # 라우팅
@@ -104,11 +144,13 @@ class SemanticRAGWorkflow:
             {
                 "llm_only": "generate_llm_only",
                 "rag_lite": "generate_rag_lite",
+                "two_stage": "generate_two_stage",
             },
         )
 
         workflow.add_edge("generate_llm_only", "format_final")
         workflow.add_edge("generate_rag_lite", "format_final")
+        workflow.add_edge("generate_two_stage", "format_final")
         workflow.add_edge("format_final", END)
 
         return workflow.compile()
@@ -117,6 +159,7 @@ class SemanticRAGWorkflow:
         """쿼리 전처리"""
         query = state["query"]
         state["debug_path"] = ["analyze_query"]
+        state["is_complex"] = False  # 초기화
 
         # 구어체 정규화
         replacements = {
@@ -134,6 +177,81 @@ class SemanticRAGWorkflow:
 
         state["processed_query"] = processed
         logger.info(f"Query processed: {processed[:50]}...")
+        return state
+
+    def check_complexity(self, state: RAGState) -> RAGState:
+        """질문 복잡도 체크 - 개선된 버전"""
+        state["debug_path"].append("check_complexity")
+        query = state["processed_query"]
+
+        # 복잡한 질문 패턴 (개선)
+        complex_patterns = [
+            r"\d+\s*개월.*\d+\s*개월",  # 여러 기간 언급
+            r"[가-힣]*회사.*[가-힣]*회사",  # 여러 회사 (한글 포함)
+            r"프리랜서.*정규직|정규직.*프리랜서",  # 복합 고용
+            r"\d+\s*살.*\d+\s*만\s*원",  # 나이+월급
+            r"육아휴직|병역|공백",  # 특수 상황
+            r"이전에.*그전에|처음.*두번째.*세번째",  # 복수 이력
+            r"권고사직.*임금체불|해고.*자진퇴사",  # 복합 퇴사사유
+            r"\d+번째.*수급|반복.*수급",  # 반복수급
+        ]
+
+        # 복잡도 판단
+        is_complex = False
+        for pattern in complex_patterns:
+            if re.search(pattern, query, re.IGNORECASE):
+                is_complex = True
+                logger.debug(f"Complex pattern matched: {pattern}")
+                break
+
+        # 숫자가 3개 이상이면 복잡
+        numbers = re.findall(r"\d+", query)
+        if len(numbers) >= 3:
+            is_complex = True
+            logger.debug(f"Multiple numbers detected: {numbers}")
+
+        state["is_complex"] = is_complex
+        logger.info(f"Query complexity: {'complex' if is_complex else 'simple'}")
+
+        return state
+
+    def route_by_complexity(self, state: RAGState) -> str:
+        """복잡도에 따른 라우팅"""
+        return "complex" if state.get("is_complex", False) else "simple"
+
+    def extract_variables(self, state: RAGState) -> RAGState:
+        """변수 추출 (LLM 파싱)"""
+        state["debug_path"].append("extract_variables")
+
+        try:
+            variables = unemployment_logic.extract_variables_with_llm(
+                state["processed_query"]
+            )
+            state["extracted_variables"] = variables
+            logger.info(f"Variables extracted: {variables}")
+        except Exception as e:
+            logger.error(f"Variable extraction failed: {e}")
+            state["extracted_variables"] = {}
+
+        return state
+
+    def calculate_benefit(self, state: RAGState) -> RAGState:
+        """실업급여 계산"""
+        state["debug_path"].append("calculate_benefit")
+
+        variables = state.get("extracted_variables", {})
+        if not variables:
+            state["calculation_result"] = {}
+            return state
+
+        try:
+            result = unemployment_logic.calculate_total_benefit(variables)
+            state["calculation_result"] = result
+            logger.info(f"Calculation complete: {result.get('eligible')}")
+        except Exception as e:
+            logger.error(f"Calculation failed: {e}")
+            state["calculation_result"] = {}
+
         return state
 
     def rag_search(self, state: RAGState) -> RAGState:
@@ -161,10 +279,18 @@ class SemanticRAGWorkflow:
         return state
 
     def simple_evaluate(self, state: RAGState) -> RAGState:
-        """키워드 매칭 평가 개선"""
+        """평가 및 모드 결정"""
         state["debug_path"].append("simple_evaluate")
 
-        # 디버그 로깅 추가
+        # 복잡한 질문이고 계산 결과가 있으면 two_stage
+        if state.get("is_complex") and state.get("calculation_result"):
+            state["mode"] = "two_stage"
+            state["hit_ratio"] = 1.0
+            state["overlap_score"] = 1.0
+            logger.info("Mode: two_stage (complex with calculation)")
+            return state
+
+        # 기존 평가 로직
         logger.info(
             f"RAG scores - rel: {state.get('relevance_score', 0):.3f}, "
             f"overlap: {state.get('overlap_score', 0):.3f}, "
@@ -217,7 +343,7 @@ class SemanticRAGWorkflow:
         else:
             state["overlap_score"] = 0.0
 
-        # 직접 답변 가능 체크
+        # 모드 결정
         if (
             state.get("relevance_score", 0) > 0.15
             and state.get("documents")
@@ -234,7 +360,7 @@ class SemanticRAGWorkflow:
         else:
             state["mode"] = "llm_only"
 
-        state["citation"] = ""  # 근거 표시 제거
+        state["citation"] = ""
 
         logger.info(
             f"Evaluation - hit_ratio: {state['hit_ratio']:.2f}, "
@@ -247,6 +373,78 @@ class SemanticRAGWorkflow:
     def route_by_mode(self, state: RAGState) -> str:
         """모드에 따라 라우팅"""
         return state["mode"]
+
+    def generate_two_stage(self, state: RAGState) -> RAGState:
+        """2단계 생성 (계산 결과 + 설명) - 개선된 버전"""
+        state["debug_path"].append("generate_two_stage")
+
+        calc_result = state.get("calculation_result", {})
+
+        # 계산 결과가 없거나 비어있으면 폴백
+        if not calc_result or "eligible" not in calc_result:
+            # 폴백: rag_lite로 처리
+            logger.warning("No calculation result, falling back to rag_lite")
+            return self.generate_rag_lite(state)
+
+        # 계산 결과를 구조화된 텍스트로
+        formatted_result = unemployment_logic.format_calculation_result(calc_result)
+
+        try:
+            from openai import OpenAI
+            import config
+
+            client = OpenAI(
+                base_url="https://api.together.xyz/v1",
+                api_key=config.OPENROUTER_API_KEY,
+            )
+
+            # 최종 설명 생성 프롬프트
+            user_prompt = f"""[원래 질문]
+{state['query']}
+
+[계산된 결과]
+{formatted_result}
+
+[RAG 검색 정보]
+{state.get('context', '')}
+
+[지시사항]
+1. 위 계산 결과를 친근하고 자연스럽게 설명
+2. 추가 계산 금지 (이미 완료됨)
+3. 숫자는 정확히 그대로 사용
+4. 400자 이내로 완성
+
+답변:"""
+
+            messages = [
+                {"role": "system", "content": self.SYSTEM_PROMPT_FINAL},
+                {"role": "user", "content": user_prompt},
+            ]
+
+            completion = client.chat.completions.create(
+                model=config.MODEL,  # Qwen3-235B
+                messages=messages,
+                temperature=0.3,
+                max_tokens=400,
+                timeout=15,
+            )
+
+            raw_answer = completion.choices[0].message.content
+
+            # 길이 체크
+            if len(raw_answer) > 400:
+                raw_answer = self.truncate_safely(raw_answer, 400)
+
+            state["raw_answer"] = raw_answer
+            state["confidence"] = 0.95  # 계산 기반이므로 높은 신뢰도
+
+        except Exception as e:
+            logger.error(f"Two-stage generation failed: {e}")
+            # 폴백: 계산 결과만 반환
+            state["raw_answer"] = formatted_result
+            state["confidence"] = 0.8
+
+        return state
 
     def generate_llm_only(self, state: RAGState) -> RAGState:
         """LLM only 모드"""
@@ -327,7 +525,7 @@ class SemanticRAGWorkflow:
 
         return state
 
-    def truncate_safely(self, text: str, max_len: int = 1000) -> str:
+    def truncate_safely(self, text: str, max_len: int = 400) -> str:
         """문장 단위로 안전하게 자르기"""
         if len(text) <= max_len:
             return text
@@ -355,7 +553,8 @@ class SemanticRAGWorkflow:
 
         # 기본 정보 추출
         base_answer = ""
-        if state["documents"]:
+        parent_text = ""
+        if state.get("documents"):
             doc = state["documents"][0]
             base_answer = doc.get("answer", "")
             parent_text = doc.get("parent_text", "")
@@ -375,21 +574,21 @@ class SemanticRAGWorkflow:
             if high_confidence and base_answer:
                 # 높은 품질: 정보 보완자 역할
                 user_prompt = f"""[핵심 정보 - 정확함]
-    {base_answer}
+{base_answer}
 
-    [추가 컨텍스트]
-    {parent_text if parent_text else context}
+[추가 컨텍스트]
+{parent_text if parent_text else context}
 
-    [사용자 질문]
-    {state['query']}
+[사용자 질문]
+{state['query']}
 
-    [당신의 역할: 정보 보완 전문가]
-    1. 핵심 정보는 100% 정확하므로 그대로 사용
-    2. 질문의 맥락에 맞게 자연스럽게 설명 추가
-    3. 부족한 부분만 보충하되 각 문장이 자연스럽게 이어지게 해줘
-    4. 400자 이내로 완성 
+[당신의 역할: 정보 보완 전문가]
+1. 핵심 정보는 100% 정확하므로 그대로 사용
+2. 질문의 맥락에 맞게 자연스럽게 설명 추가
+3. 부족한 부분만 보충하되 각 문장이 자연스럽게 이어지게 해줘
+4. 400자 이내로 완성 
 
-    답변:"""
+답변:"""
                 system_msg = (
                     "실업급여 전문 상담사. 제공된 핵심 정보를 바탕으로 친절하게 설명."
                 )
@@ -398,23 +597,23 @@ class SemanticRAGWorkflow:
             else:
                 # 낮은 품질: 참고만 하고 전문가 답변
                 user_prompt = f"""[참고 정보 - 신뢰도 낮음]
-    {context}
+{context}
 
-    [질문]
-    {state['query']}
+[질문]
+{state['query']}
 
-    [당신의 역할: 실업급여 전문가]
-    1. 주어진 질문의 맥락에 맞게 자연스럽게 설명
-    2. 각 문장이 자연스럽게 이어지게 해주되 간결하게
-    3. 400자 이내로 완성
+[당신의 역할: 실업급여 전문가]
+1. 주어진 질문의 맥락에 맞게 자연스럽게 설명
+2. 각 문장이 자연스럽게 이어지게 해주되 간결하게
+3. 400자 이내로 완성
 
-    [2025년 정확한 정보]
-    - 반복수급: 3회 10%, 4회 25%, 5회 40%, 6회 이상 50%
-    - 구직활동: 4주마다 1회 이상
-    - 상한액: 66,000원, 하한액: 64,192원
-    - 조건: 18개월 중 180일
+[2025년 정확한 정보]
+- 반복수급: 3회 10%, 4회 25%, 5회 40%, 6회 이상 50%
+- 구직활동: 4주마다 1회 이상
+- 상한액: 66,000원, 하한액: 64,192원
+- 조건: 18개월 중 180일
 
-    전문가로서 정확한 답변:"""
+전문가로서 정확한 답변:"""
                 system_msg = "실업급여 전문가. 2025년 최신 정보로 정확히."
                 temp = 0.3
 
@@ -503,6 +702,9 @@ class SemanticRAGWorkflow:
         initial_state = {
             "query": query,
             "processed_query": "",
+            "is_complex": False,
+            "extracted_variables": {},
+            "calculation_result": {},
             "documents": [],
             "relevance_score": 0.0,
             "context": "",
@@ -529,6 +731,8 @@ class SemanticRAGWorkflow:
                 "hit_ratio": result.get("hit_ratio", 0.0),
                 "overlap_score": result.get("overlap_score", 0.0),
                 "relevance_score": result.get("relevance_score", 0.0),
+                "is_complex": result.get("is_complex", False),
+                "has_calculation": bool(result.get("calculation_result")),
             },
         }
 
