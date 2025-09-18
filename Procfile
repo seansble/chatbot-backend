@@ -1,1 +1,1 @@
-web: cd backend && python app.py
+web: cd backend && python -c "import traceback; import sys; sys.path.insert(0, '.'); exec('try:\n    import app\n    print(\"IMPORT SUCCESS\")\nexcept Exception as e:\n    traceback.print_exc()\n    sys.exit(1)')"

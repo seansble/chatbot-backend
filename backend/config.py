@@ -1,6 +1,7 @@
 # backend/config.py
 
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
 # Railway는 환경변수 자동 주입, 로컬 개발시만 .env 필요

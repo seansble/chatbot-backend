@@ -1,0 +1,1156 @@
+[
+  {
+    "id": "폐업_고유어나이_한글급여",
+    "query": "마흔둘이고 2년 다니다가 회사가 문 닫아서 퇴사. 월급은 삼백오십만원 정도.",
+    "steps": {
+      "extraction": {
+        "extracted": {
+          "age": 42,
+          "monthly_salary": 3500000,
+          "eligible_months": 24,
+          "resignation_category": "비자발적",
+          "repetition_count": null,
+          "disability": false,
+          "special_reason": "회사폐업",
+          "_evidence": {
+            "age": {
+              "field": "age",
+              "start": 0,
+              "end": 3,
+              "text": "마흔둘",
+              "method": "rule"
+            },
+            "monthly_salary": {
+              "field": "monthly_salary",
+              "start": 32,
+              "end": 38,
+              "text": "삼백오십만원",
+              "unit": "KRW/month",
+              "method": "rule"
+            },
+            "eligible_months": {
+              "method": "rule",
+              "unit": "month"
+            },
+            "repetition_count": {},
+            "disability": {}
+          },
+          "confidence": {
+            "overall": 0.8275,
+            "age": 0.95,
+            "salary": 0.9,
+            "months": 0.9,
+            "resignation": 0.5
+          }
+        },
+        "expected": {
+          "age": 42,
+          "eligible_months": 24,
+          "monthly_salary": 3500000,
+          "resignation_category": "비자발적",
+          "special_reason": "회사폐업"
+        },
+        "accuracy": 100.0
+      },
+      "calculation": {
+        "eligible": true,
+        "age": 42,
+        "monthly_salary": 3500000,
+        "eligible_months": 24,
+        "resignation_type": "비자발적",
+        "resignation_reason": "회사폐업",
+        "is_youth": false,
+        "daily_benefit": 66000,
+        "applied_limit": "상한액",
+        "benefit_days": 180,
+        "total_amount": 11880000,
+        "reduction_info": "",
+        "employment_type": null,
+        "employment_types": [],
+        "policy_notes": [],
+        "warnings": [],
+        "required_documents": [
+          "폐업증명서",
+          "법인등기부등본 (말소)",
+          "고용보험 상실신고서",
+          "사업장 폐업 통지서"
+        ],
+        "confidence": {
+          "overall": 0.8275,
+          "age": 0.95,
+          "salary": 0.9,
+          "months": 0.9,
+          "resignation": 0.5
+        }
+      },
+      "rag_search": {
+        "search_query": "비자발적 회사폐업",
+        "found_passages": 1,
+        "relevant": {
+          "found_keywords": [
+            "비자발적"
+          ],
+          "coverage": 100.0
+        }
+      },
+      "response": {
+        "text": "회사폐업으로 인한 퇴사는 비자발적 퇴사로 실업급여 수급 가능. 42세 24개월 가입 180일 일 급여 66,000원 총 11,880,000원",
+        "contains_keywords": {
+          "found": [
+            "수급 가능",
+            "24개월",
+            "180일"
+          ],
+          "missing": [],
+          "coverage": 100.0
+        },
+        "length": 78
+      }
+    },
+    "total_score": 100.0
+  },
+  {
+    "id": "임금체불_노동청_숫자연봉",
+    "query": "서른여덟입니다. 20개월 일했고 마지막 3개월 월급 못 받아 노동청 신고했습니다. 연봉 3600.",
+    "steps": {
+      "extraction": {
+        "extracted": {
+          "age": 38,
+          "monthly_salary": 3000000,
+          "eligible_months": 20,
+          "resignation_category": "정당한자발적",
+          "repetition_count": null,
+          "disability": false,
+          "special_reason": "임금체불",
+          "_evidence": {
+            "age": {
+              "field": "age",
+              "start": 0,
+              "end": 7,
+              "text": "서른여덟입니다",
+              "method": "rule"
+            },
+            "monthly_salary": {
+              "field": "monthly_salary",
+              "start": 46,
+              "end": 53,
+              "text": "연봉 3600",
+              "unit": "KRW/month",
+              "note": "연봉(숫자)->/12",
+              "method": "rule"
+            },
+            "eligible_months": {
+              "method": "rule",
+              "unit": "month"
+            },
+            "repetition_count": {},
+            "disability": {},
+            "resignation_category": {
+              "start": 26,
+              "end": 32,
+              "text": "월급 못 받"
+            }
+          },
+          "confidence": {
+            "overall": 0.8275,
+            "age": 0.95,
+            "salary": 0.9,
+            "months": 0.9,
+            "resignation": 0.5
+          }
+        },
+        "expected": {
+          "age": 38,
+          "eligible_months": 20,
+          "monthly_salary": 3000000,
+          "resignation_category": "정당한자발적",
+          "special_reason": "임금체불"
+        },
+        "accuracy": 100.0
+      },
+      "calculation": {
+        "eligible": true,
+        "age": 38,
+        "monthly_salary": 3000000,
+        "eligible_months": 20,
+        "resignation_type": "정당한자발적",
+        "resignation_reason": "임금체불",
+        "is_youth": false,
+        "daily_benefit": 64192,
+        "applied_limit": "하한액",
+        "benefit_days": 180,
+        "total_amount": 11554560,
+        "reduction_info": "",
+        "employment_type": null,
+        "employment_types": [],
+        "policy_notes": [],
+        "warnings": [
+          "💡 2025년 상한액(66,000원)과 하한액(64,192원) 격차가 1,808원으로 매우 좁아졌습니다"
+        ],
+        "required_documents": [
+          "임금체불 확인서 (노동청 발급)",
+          "내용증명 또는 진정서 사본",
+          "급여명세서 및 통장 거래내역",
+          "근로계약서"
+        ],
+        "confidence": {
+          "overall": 0.8275,
+          "age": 0.95,
+          "salary": 0.9,
+          "months": 0.9,
+          "resignation": 0.5
+        }
+      },
+      "rag_search": {
+        "search_query": "정당한자발적 임금체불",
+        "found_passages": 2,
+        "relevant": {
+          "found_keywords": [
+            "임금체불"
+          ],
+          "coverage": 50.0
+        }
+      },
+      "response": {
+        "text": "임금체불으로 인한 퇴사는 정당한 자발적 퇴사로 실업급여 수급 가능. 38세 20개월 가입 180일 일 급여 64,192원 총 11,554,560원",
+        "contains_keywords": {
+          "found": [
+            "임금체불",
+            "수급 가능",
+            "180일"
+          ],
+          "missing": [],
+          "coverage": 100.0
+        },
+        "length": 81
+      }
+    },
+    "total_score": 90.0
+  },
+  {
+    "id": "통근곤란_반복4회",
+    "query": "네번째 받고 싶어요. 편도 3시간 반이라 못 다닙니다. 8개월 근무했고 월급 290만원.",
+    "steps": {
+      "extraction": {
+        "extracted": {
+          "age": 35,
+          "monthly_salary": 2900000,
+          "eligible_months": 8,
+          "resignation_category": "정당한자발적",
+          "repetition_count": 4,
+          "disability": false,
+          "special_reason": "통근곤란",
+          "repetition": 4,
+          "_evidence": {
+            "age": {},
+            "monthly_salary": {
+              "field": "monthly_salary",
+              "start": 43,
+              "end": 48,
+              "text": "290만원",
+              "unit": "KRW/month",
+              "method": "rule"
+            },
+            "eligible_months": {
+              "method": "rule",
+              "unit": "month"
+            },
+            "repetition_count": {
+              "field": "repetition_count",
+              "start": 0,
+              "end": 3,
+              "text": "네번째",
+              "method": "rule"
+            },
+            "disability": {}
+          },
+          "confidence": {
+            "overall": 0.685,
+            "age": 0.0,
+            "salary": 0.9,
+            "months": 0.9,
+            "resignation": 0.5
+          }
+        },
+        "expected": {
+          "eligible_months": 8,
+          "monthly_salary": 2900000,
+          "resignation_category": "정당한자발적",
+          "special_reason": "통근곤란",
+          "repetition_count": 4
+        },
+        "accuracy": 100.0
+      },
+      "calculation": {
+        "eligible": true,
+        "age": 35,
+        "monthly_salary": 2900000,
+        "eligible_months": 8,
+        "resignation_type": "정당한자발적",
+        "resignation_reason": "통근곤란",
+        "is_youth": false,
+        "daily_benefit": 64192,
+        "applied_limit": "하한액",
+        "benefit_days": 90,
+        "total_amount": 5777280,
+        "reduction_info": "4회차 반복수급으로 25% 감액 (원래 120일 → 90일)",
+        "employment_type": null,
+        "employment_types": [],
+        "policy_notes": [],
+        "warnings": [
+          "⚠️ 5년 내 4회째 수급으로 25% 감액 적용",
+          "💡 2025년 상한액(66,000원)과 하한액(64,192원) 격차가 1,808원으로 매우 좁아졌습니다"
+        ],
+        "required_documents": [
+          "이직확인서",
+          "고용보험 피보험자격 상실신고서",
+          "최근 3개월 급여명세서",
+          "근로계약서"
+        ],
+        "confidence": {
+          "overall": 0.685,
+          "age": 0.0,
+          "salary": 0.9,
+          "months": 0.9,
+          "resignation": 0.5
+        }
+      },
+      "rag_search": {
+        "search_query": "정당한자발적 통근곤란 반복수급",
+        "found_passages": 2,
+        "relevant": {
+          "found_keywords": [
+            "통근"
+          ],
+          "coverage": 50.0
+        }
+      },
+      "response": {
+        "text": "통근곤란으로 인한 퇴사는 정당한 자발적 퇴사로 실업급여 수급 가능. 35세 8개월 가입 90일 일 급여 64,192원 총 5,777,280원 (4회차 반복수급으로 25% 감액 (원래 120일 → 90일)) 반복수급 감액 적용",
+        "contains_keywords": {
+          "found": [
+            "4회차",
+            "감액",
+            "통근",
+            "90일"
+          ],
+          "missing": [],
+          "coverage": 100.0
+        },
+        "length": 125
+      }
+    },
+    "total_score": 90.0
+  },
+  {
+    "id": "괴롭힘_복수회사합산",
+    "query": "서른다섯입니다. 첫 회사 6개월 220만, 두번째 회사 10개월 250만 받다가 상사 폭언과 괴롭힘으로 퇴사.",
+    "steps": {
+      "extraction": {
+        "extracted": {
+          "age": 35,
+          "monthly_salary": 2500000,
+          "eligible_months": 16,
+          "resignation_category": "정당한자발적",
+          "repetition_count": null,
+          "disability": false,
+          "special_reason": "직장내괴롭힘",
+          "career_history": [
+            {
+              "order": "첫",
+              "months": 6,
+              "salary": 2200000,
+              "offset": 9
+            },
+            {
+              "order": "두번째",
+              "months": 10,
+              "salary": 2500000,
+              "offset": 24
+            }
+          ],
+          "_evidence": {
+            "age": {
+              "field": "age",
+              "start": 0,
+              "end": 7,
+              "text": "서른다섯입니다",
+              "method": "rule"
+            },
+            "monthly_salary": {},
+            "eligible_months": {
+              "method": "rule",
+              "unit": "month"
+            },
+            "repetition_count": {},
+            "disability": {}
+          },
+          "confidence": {
+            "overall": 0.685,
+            "age": 0.0,
+            "salary": 0.9,
+            "months": 0.9,
+            "resignation": 0.5
+          }
+        },
+        "expected": {
+          "age": 35,
+          "eligible_months": 16,
+          "monthly_salary": 2500000,
+          "resignation_category": "정당한자발적",
+          "special_reason": "직장내괴롭힘"
+        },
+        "accuracy": 100.0
+      },
+      "calculation": {
+        "eligible": true,
+        "age": 35,
+        "monthly_salary": 2500000,
+        "eligible_months": 16,
+        "resignation_type": "정당한자발적",
+        "resignation_reason": "직장내괴롭힘",
+        "is_youth": false,
+        "daily_benefit": 64192,
+        "applied_limit": "하한액",
+        "benefit_days": 180,
+        "total_amount": 11554560,
+        "reduction_info": "",
+        "employment_type": null,
+        "employment_types": [],
+        "policy_notes": [],
+        "warnings": [
+          "💡 2025년 상한액(66,000원)과 하한액(64,192원) 격차가 1,808원으로 매우 좁아졌습니다"
+        ],
+        "required_documents": [
+          "직장 내 괴롭힘 신고서",
+          "진단서 (정신과 등)",
+          "증인 진술서 또는 녹취록",
+          "관련 증거자료 (이메일, 메신저 등)"
+        ],
+        "confidence": {
+          "overall": 0.685,
+          "age": 0.0,
+          "salary": 0.9,
+          "months": 0.9,
+          "resignation": 0.5
+        }
+      },
+      "rag_search": {
+        "search_query": "정당한자발적 직장내괴롭힘",
+        "found_passages": 2,
+        "relevant": {
+          "found_keywords": [
+            "괴롭힘"
+          ],
+          "coverage": 50.0
+        }
+      },
+      "response": {
+        "text": "직장내괴롭힘으로 인한 퇴사는 정당한 자발적 퇴사로 실업급여 수급 가능. 35세 16개월 가입 180일 일 급여 64,192원 총 11,554,560원",
+        "contains_keywords": {
+          "found": [
+            "수급 가능",
+            "16개월",
+            "괴롭힘"
+          ],
+          "missing": [],
+          "coverage": 100.0
+        },
+        "length": 83
+      }
+    },
+    "total_score": 90.0
+  },
+  {
+    "id": "질병_정규직18",
+    "query": "마흔이고 정규직으로 18개월 근무. 우울증 진단서 있어요. 월급은 사백만원.",
+    "steps": {
+      "extraction": {
+        "extracted": {
+          "age": 40,
+          "monthly_salary": 4000000,
+          "eligible_months": 18,
+          "resignation_category": "정당한자발적",
+          "repetition_count": null,
+          "disability": false,
+          "employment_type": "정규직",
+          "employment_types": [
+            "정규직"
+          ],
+          "special_reason": "질병/부상",
+          "_evidence": {
+            "age": {
+              "field": "age",
+              "start": 0,
+              "end": 2,
+              "text": "마흔",
+              "method": "rule"
+            },
+            "monthly_salary": {
+              "field": "monthly_salary",
+              "start": 37,
+              "end": 41,
+              "text": "사백만원",
+              "unit": "KRW/month",
+              "method": "rule"
+            },
+            "eligible_months": {
+              "method": "rule",
+              "unit": "month"
+            },
+            "repetition_count": {},
+            "disability": {}
+          },
+          "confidence": {
+            "overall": 0.8275,
+            "age": 0.95,
+            "salary": 0.9,
+            "months": 0.9,
+            "resignation": 0.5
+          }
+        },
+        "expected": {
+          "age": 40,
+          "eligible_months": 18,
+          "monthly_salary": 4000000,
+          "resignation_category": "정당한자발적",
+          "special_reason": "질병/부상"
+        },
+        "accuracy": 100.0
+      },
+      "calculation": {
+        "eligible": true,
+        "age": 40,
+        "monthly_salary": 4000000,
+        "eligible_months": 18,
+        "resignation_type": "정당한자발적",
+        "resignation_reason": "질병/부상",
+        "is_youth": false,
+        "daily_benefit": 66000,
+        "applied_limit": "상한액",
+        "benefit_days": 180,
+        "total_amount": 11880000,
+        "reduction_info": "",
+        "employment_type": "정규직",
+        "employment_types": [
+          "정규직"
+        ],
+        "policy_notes": [],
+        "warnings": [],
+        "required_documents": [
+          "의사 소견서 또는 진단서",
+          "병가 사용 내역",
+          "치료 확인서",
+          "산재 처리 서류 (해당시)"
+        ],
+        "confidence": {
+          "overall": 0.8275,
+          "age": 0.95,
+          "salary": 0.9,
+          "months": 0.9,
+          "resignation": 0.5
+        }
+      },
+      "rag_search": {
+        "search_query": "정당한자발적 질병/부상",
+        "found_passages": 1,
+        "relevant": {
+          "found_keywords": [],
+          "coverage": 0.0
+        }
+      },
+      "response": {
+        "text": "질병/부상으로 인한 퇴사는 정당한 자발적 퇴사로 실업급여 수급 가능. 40세 18개월 가입 180일 일 급여 66,000원 총 11,880,000원",
+        "contains_keywords": {
+          "found": [
+            "18개월",
+            "수급 가능"
+          ],
+          "missing": [],
+          "coverage": 100.0
+        },
+        "length": 82
+      }
+    },
+    "total_score": 80.0
+  },
+  {
+    "id": "장애_55세_폐업_10개월",
+    "query": "장애 등록했고 쉰다섯이에요. 작년 6월부터 올해 3월까지 10개월 일했는데 회사가 망해서 나왔습니다. 월급 이백칠십.",
+    "steps": {
+      "extraction": {
+        "extracted": {
+          "age": 55,
+          "monthly_salary": 2700000,
+          "eligible_months": 10,
+          "resignation_category": "비자발적",
+          "repetition_count": null,
+          "disability": true,
+          "special_reason": "회사폐업",
+          "_evidence": {
+            "age": {
+              "field": "age",
+              "start": 8,
+              "end": 14,
+              "text": "쉰다섯이에요",
+              "method": "rule"
+            },
+            "monthly_salary": {
+              "field": "monthly_salary",
+              "start": 60,
+              "end": 64,
+              "text": "이백칠십",
+              "unit": "KRW/month",
+              "method": "rule"
+            },
+            "eligible_months": {
+              "field": "eligible_months",
+              "start": 16,
+              "end": 31,
+              "text": "작년 6월부터 올해 3월까지",
+              "unit": "month",
+              "note": "작년~올해",
+              "method": "rule"
+            },
+            "repetition_count": {},
+            "disability": {
+              "start": 0,
+              "end": 2,
+              "text": "장애"
+            }
+          },
+          "confidence": {
+            "overall": 0.8275,
+            "age": 0.95,
+            "salary": 0.9,
+            "months": 0.9,
+            "resignation": 0.5
+          }
+        },
+        "expected": {
+          "age": 55,
+          "eligible_months": 10,
+          "monthly_salary": 2700000,
+          "resignation_category": "비자발적",
+          "special_reason": "회사폐업",
+          "disability": true
+        },
+        "accuracy": 100.0
+      },
+      "calculation": {
+        "eligible": true,
+        "age": 55,
+        "monthly_salary": 2700000,
+        "eligible_months": 10,
+        "resignation_type": "비자발적",
+        "resignation_reason": "회사폐업",
+        "is_youth": false,
+        "daily_benefit": 64192,
+        "applied_limit": "하한액",
+        "benefit_days": 270,
+        "total_amount": 17331840,
+        "reduction_info": "",
+        "employment_type": null,
+        "employment_types": [],
+        "policy_notes": [
+          "장애 등록 + 만 50세 이상: 수급일수 270일 적용"
+        ],
+        "warnings": [
+          "💡 2025년 상한액(66,000원)과 하한액(64,192원) 격차가 1,808원으로 매우 좁아졌습니다"
+        ],
+        "required_documents": [
+          "폐업증명서",
+          "법인등기부등본 (말소)",
+          "고용보험 상실신고서",
+          "사업장 폐업 통지서"
+        ],
+        "confidence": {
+          "overall": 0.8275,
+          "age": 0.95,
+          "salary": 0.9,
+          "months": 0.9,
+          "resignation": 0.5
+        }
+      },
+      "rag_search": {
+        "search_query": "비자발적 회사폐업 장애인",
+        "found_passages": 2,
+        "relevant": {
+          "found_keywords": [
+            "비자발적"
+          ],
+          "coverage": 50.0
+        }
+      },
+      "response": {
+        "text": "회사폐업으로 인한 퇴사는 비자발적 퇴사로 실업급여 수급 가능. 55세 10개월 가입 270일 일 급여 64,192원 총 17,331,840원",
+        "contains_keywords": {
+          "found": [
+            "270일",
+            "10개월",
+            "회사폐업"
+          ],
+          "missing": [],
+          "coverage": 100.0
+        },
+        "length": 78
+      }
+    },
+    "total_score": 90.0
+  },
+  {
+    "id": "계약만료_경계12개월",
+    "query": "서른둘입니다. 1년 계약만료로 종료됐고 월급은 이백팔십만원.",
+    "steps": {
+      "extraction": {
+        "extracted": {
+          "age": 32,
+          "monthly_salary": 2800000,
+          "eligible_months": 12,
+          "resignation_category": "비자발적",
+          "repetition_count": null,
+          "disability": false,
+          "special_reason": "계약만료",
+          "_evidence": {
+            "age": {
+              "field": "age",
+              "start": 0,
+              "end": 6,
+              "text": "서른둘입니다",
+              "method": "rule"
+            },
+            "monthly_salary": {
+              "field": "monthly_salary",
+              "start": 26,
+              "end": 32,
+              "text": "이백팔십만원",
+              "unit": "KRW/month",
+              "method": "rule"
+            },
+            "eligible_months": {
+              "method": "rule",
+              "unit": "month"
+            },
+            "repetition_count": {},
+            "disability": {}
+          },
+          "confidence": {
+            "overall": 0.8275,
+            "age": 0.95,
+            "salary": 0.9,
+            "months": 0.9,
+            "resignation": 0.5
+          }
+        },
+        "expected": {
+          "age": 32,
+          "eligible_months": 12,
+          "monthly_salary": 2800000,
+          "resignation_category": "비자발적",
+          "special_reason": "계약만료"
+        },
+        "accuracy": 100.0
+      },
+      "calculation": {
+        "eligible": true,
+        "age": 32,
+        "monthly_salary": 2800000,
+        "eligible_months": 12,
+        "resignation_type": "비자발적",
+        "resignation_reason": "계약만료",
+        "is_youth": true,
+        "daily_benefit": 64192,
+        "applied_limit": "하한액",
+        "benefit_days": 180,
+        "total_amount": 11554560,
+        "reduction_info": "",
+        "employment_type": null,
+        "employment_types": [],
+        "policy_notes": [
+          "청년 특례 적용: 만 32세, 최소 가입기간 3개월, 수급액 10% 가산"
+        ],
+        "warnings": [
+          "💡 2025년 상한액(66,000원)과 하한액(64,192원) 격차가 1,808원으로 매우 좁아졌습니다"
+        ],
+        "required_documents": [
+          "근로계약서",
+          "계약만료 통지서",
+          "재계약 거절 통지서"
+        ],
+        "confidence": {
+          "overall": 0.8275,
+          "age": 0.95,
+          "salary": 0.9,
+          "months": 0.9,
+          "resignation": 0.5
+        }
+      },
+      "rag_search": {
+        "search_query": "비자발적 계약만료",
+        "found_passages": 1,
+        "relevant": {
+          "found_keywords": [
+            "비자발적"
+          ],
+          "coverage": 100.0
+        }
+      },
+      "response": {
+        "text": "계약만료으로 인한 퇴사는 비자발적 퇴사로 실업급여 수급 가능. 32세 12개월 가입 180일 일 급여 64,192원 총 11,554,560원",
+        "contains_keywords": {
+          "found": [
+            "180일",
+            "수급 가능"
+          ],
+          "missing": [],
+          "coverage": 100.0
+        },
+        "length": 78
+      }
+    },
+    "total_score": 100.0
+  },
+  {
+    "id": "권고사직_60개월초과",
+    "query": "마흔일곱입니다. 5년 1개월 근무했고 권고사직으로 나왔어요. 월급은 320만원.",
+    "steps": {
+      "extraction": {
+        "extracted": {
+          "age": 47,
+          "monthly_salary": 3200000,
+          "eligible_months": 61,
+          "resignation_category": "비자발적",
+          "repetition_count": null,
+          "disability": false,
+          "special_reason": "권고사직",
+          "_evidence": {
+            "age": {
+              "field": "age",
+              "start": 0,
+              "end": 7,
+              "text": "마흔일곱입니다",
+              "method": "rule"
+            },
+            "monthly_salary": {
+              "field": "monthly_salary",
+              "start": 38,
+              "end": 43,
+              "text": "320만원",
+              "unit": "KRW/month",
+              "method": "rule"
+            },
+            "eligible_months": {
+              "method": "rule",
+              "unit": "month"
+            },
+            "repetition_count": {},
+            "disability": {}
+          },
+          "confidence": {
+            "overall": 0.8275,
+            "age": 0.95,
+            "salary": 0.9,
+            "months": 0.9,
+            "resignation": 0.5
+          }
+        },
+        "expected": {
+          "age": 47,
+          "eligible_months": 61,
+          "monthly_salary": 3200000,
+          "resignation_category": "비자발적",
+          "special_reason": "권고사직"
+        },
+        "accuracy": 100.0
+      },
+      "calculation": {
+        "eligible": true,
+        "age": 47,
+        "monthly_salary": 3200000,
+        "eligible_months": 61,
+        "resignation_type": "비자발적",
+        "resignation_reason": "권고사직",
+        "is_youth": false,
+        "daily_benefit": 64192,
+        "applied_limit": "하한액",
+        "benefit_days": 240,
+        "total_amount": 15406080,
+        "reduction_info": "",
+        "employment_type": null,
+        "employment_types": [],
+        "policy_notes": [],
+        "warnings": [
+          "💡 2025년 상한액(66,000원)과 하한액(64,192원) 격차가 1,808원으로 매우 좁아졌습니다"
+        ],
+        "required_documents": [
+          "권고사직서",
+          "사직서",
+          "퇴직금 명세서",
+          "회사 발급 경위서"
+        ],
+        "confidence": {
+          "overall": 0.8275,
+          "age": 0.95,
+          "salary": 0.9,
+          "months": 0.9,
+          "resignation": 0.5
+        }
+      },
+      "rag_search": {
+        "search_query": "비자발적 권고사직",
+        "found_passages": 1,
+        "relevant": {
+          "found_keywords": [
+            "비자발적"
+          ],
+          "coverage": 100.0
+        }
+      },
+      "response": {
+        "text": "권고사직으로 인한 퇴사는 비자발적 퇴사로 실업급여 수급 가능. 47세 61개월 가입 240일 일 급여 64,192원 총 15,406,080원",
+        "contains_keywords": {
+          "found": [
+            "240일",
+            "수급 가능"
+          ],
+          "missing": [],
+          "coverage": 100.0
+        },
+        "length": 78
+      }
+    },
+    "total_score": 100.0
+  },
+  {
+    "id": "고령무장애_36개월_질병",
+    "query": "예순넷입니다. 3년 근무했고 허리수술로 그만뒀습니다. 월급은 삼백이십.",
+    "steps": {
+      "extraction": {
+        "extracted": {
+          "age": 64,
+          "monthly_salary": 3200000,
+          "eligible_months": 36,
+          "resignation_category": "정당한자발적",
+          "repetition_count": null,
+          "disability": false,
+          "special_reason": "질병/부상",
+          "_evidence": {
+            "age": {
+              "field": "age",
+              "start": 0,
+              "end": 6,
+              "text": "예순넷입니다",
+              "method": "rule"
+            },
+            "monthly_salary": {
+              "field": "monthly_salary",
+              "start": 34,
+              "end": 38,
+              "text": "삼백이십",
+              "unit": "KRW/month",
+              "method": "rule"
+            },
+            "eligible_months": {
+              "method": "rule",
+              "unit": "month"
+            },
+            "repetition_count": {},
+            "disability": {},
+            "resignation_category": {
+              "start": 18,
+              "end": 20,
+              "text": "수술"
+            }
+          },
+          "confidence": {
+            "overall": 0.8275,
+            "age": 0.95,
+            "salary": 0.9,
+            "months": 0.9,
+            "resignation": 0.5
+          }
+        },
+        "expected": {
+          "age": 64,
+          "eligible_months": 36,
+          "monthly_salary": 3200000,
+          "resignation_category": "정당한자발적",
+          "special_reason": "질병/부상"
+        },
+        "accuracy": 100.0
+      },
+      "calculation": {
+        "eligible": true,
+        "age": 64,
+        "monthly_salary": 3200000,
+        "eligible_months": 36,
+        "resignation_type": "정당한자발적",
+        "resignation_reason": "질병/부상",
+        "is_youth": false,
+        "daily_benefit": 64192,
+        "applied_limit": "하한액",
+        "benefit_days": 240,
+        "total_amount": 15406080,
+        "reduction_info": "",
+        "employment_type": null,
+        "employment_types": [],
+        "policy_notes": [],
+        "warnings": [
+          "💡 2025년 상한액(66,000원)과 하한액(64,192원) 격차가 1,808원으로 매우 좁아졌습니다"
+        ],
+        "required_documents": [
+          "의사 소견서 또는 진단서",
+          "병가 사용 내역",
+          "치료 확인서",
+          "산재 처리 서류 (해당시)"
+        ],
+        "confidence": {
+          "overall": 0.8275,
+          "age": 0.95,
+          "salary": 0.9,
+          "months": 0.9,
+          "resignation": 0.5
+        }
+      },
+      "rag_search": {
+        "search_query": "정당한자발적 질병/부상",
+        "found_passages": 1,
+        "relevant": {
+          "found_keywords": [],
+          "coverage": 0.0
+        }
+      },
+      "response": {
+        "text": "질병/부상으로 인한 퇴사는 정당한 자발적 퇴사로 실업급여 수급 가능. 64세 36개월 가입 240일 일 급여 64,192원 총 15,406,080원",
+        "contains_keywords": {
+          "found": [
+            "240일",
+            "수급 가능"
+          ],
+          "missing": [],
+          "coverage": 100.0
+        },
+        "length": 82
+      }
+    },
+    "total_score": 80.0
+  },
+  {
+    "id": "예술인_계약만료_단기",
+    "query": "스물아홉 배우예요. 예술인 고용보험으로 7개월 촬영했고 시즌 종료로 계약 만료. 월급 260만.",
+    "steps": {
+      "extraction": {
+        "extracted": {
+          "age": 29,
+          "monthly_salary": 2600000,
+          "eligible_months": 7,
+          "resignation_category": "비자발적",
+          "repetition_count": null,
+          "disability": false,
+          "employment_type": "예술인",
+          "employment_types": [
+            "예술인"
+          ],
+          "special_reason": "계약만료",
+          "_evidence": {
+            "age": {
+              "field": "age",
+              "start": 0,
+              "end": 5,
+              "text": "스물아홉 ",
+              "method": "rule"
+            },
+            "monthly_salary": {
+              "field": "monthly_salary",
+              "start": 45,
+              "end": 52,
+              "text": "월급 260만",
+              "unit": "KRW/month",
+              "method": "rule"
+            },
+            "eligible_months": {
+              "method": "rule",
+              "unit": "month"
+            },
+            "repetition_count": {},
+            "disability": {}
+          },
+          "confidence": {
+            "overall": 0.8275,
+            "age": 0.95,
+            "salary": 0.9,
+            "months": 0.9,
+            "resignation": 0.5
+          }
+        },
+        "expected": {
+          "age": 29,
+          "eligible_months": 7,
+          "monthly_salary": 2600000,
+          "resignation_category": "비자발적",
+          "special_reason": "계약만료"
+        },
+        "accuracy": 100.0
+      },
+      "calculation": {
+        "eligible": true,
+        "age": 29,
+        "monthly_salary": 2600000,
+        "eligible_months": 7,
+        "resignation_type": "비자발적",
+        "resignation_reason": "계약만료",
+        "is_youth": true,
+        "daily_benefit": 64192,
+        "applied_limit": "하한액",
+        "benefit_days": 120,
+        "total_amount": 7703040,
+        "reduction_info": "",
+        "employment_type": "예술인",
+        "employment_types": [
+          "예술인"
+        ],
+        "policy_notes": [
+          "청년 특례 적용: 만 29세, 최소 가입기간 3개월, 수급액 10% 가산"
+        ],
+        "warnings": [
+          "💡 2025년 상한액(66,000원)과 하한액(64,192원) 격차가 1,808원으로 매우 좁아졌습니다"
+        ],
+        "required_documents": [
+          "근로계약서",
+          "계약만료 통지서",
+          "재계약 거절 통지서"
+        ],
+        "confidence": {
+          "overall": 0.8275,
+          "age": 0.95,
+          "salary": 0.9,
+          "months": 0.9,
+          "resignation": 0.5
+        }
+      },
+      "rag_search": {
+        "search_query": "비자발적 계약만료",
+        "found_passages": 1,
+        "relevant": {
+          "found_keywords": [
+            "비자발적"
+          ],
+          "coverage": 100.0
+        }
+      },
+      "response": {
+        "text": "계약만료으로 인한 퇴사는 비자발적 퇴사로 실업급여 수급 가능. 29세 7개월 가입 120일 일 급여 64,192원 총 7,703,040원",
+        "contains_keywords": {
+          "found": [
+            "120일",
+            "수급 가능"
+          ],
+          "missing": [],
+          "coverage": 100.0
+        },
+        "length": 76
+      }
+    },
+    "total_score": 100.0
+  }
+]

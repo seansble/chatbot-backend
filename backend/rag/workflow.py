@@ -1,5 +1,5 @@
 ﻿# backend/rag/workflow.py
-"""통합 RAG 워크플로우 - 변수 추출 중심"""
+"""통합 RAG 워크플로우 - 변수 추출 + LLM 검증 중심"""
 
 from typing import Dict, List, TypedDict, Optional, Any
 from langgraph.graph import StateGraph, END
@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
 from .unemployment_logic import unemployment_logic
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,7 @@ class RAGState(TypedDict):
     query: str
     processed_query: str
     extracted_variables: Dict[str, Any]
+    llm_verified_variables: Dict[str, Any]  # LLM 검증된 변수 추가
     calculation_result: Dict[str, Any]
     documents: List[Dict]
     relevance_score: float
@@ -62,6 +64,21 @@ class SemanticRAGWorkflow:
 
     def __init__(self, retriever):
         self.retriever = retriever
+        
+        # LLM 클라이언트 한 번만 초기화
+        try:
+            from openai import OpenAI
+            self.llm_client = OpenAI(
+                base_url="https://api.together.xyz/v1",
+                api_key=config.OPENROUTER_API_KEY,
+            )
+            self.model = config.MODEL
+            self.llm_enabled = True
+        except Exception as e:
+            logger.error(f"LLM client initialization failed: {e}")
+            self.llm_client = None
+            self.llm_enabled = False
+        
         self.workflow = self._build_workflow()
 
     def _build_workflow(self):
@@ -71,6 +88,7 @@ class SemanticRAGWorkflow:
         # 노드 정의
         workflow.add_node("analyze_query", self.analyze_query)
         workflow.add_node("extract_variables", self.extract_variables)
+        workflow.add_node("llm_verify", self.llm_verify_variables)  # 새 노드 추가
         workflow.add_node("calculate_benefit", self.calculate_benefit)
         workflow.add_node("rag_search", self.rag_search)
         workflow.add_node("simple_evaluate", self.simple_evaluate)
@@ -82,7 +100,18 @@ class SemanticRAGWorkflow:
         # 엣지 정의
         workflow.set_entry_point("analyze_query")
         workflow.add_edge("analyze_query", "extract_variables")
-        workflow.add_edge("extract_variables", "calculate_benefit")
+        
+        # 조건부 LLM 검증
+        workflow.add_conditional_edges(
+            "extract_variables",
+            self.route_llm_verification,
+            {
+                "verify": "llm_verify",
+                "skip": "calculate_benefit",
+            }
+        )
+        
+        workflow.add_edge("llm_verify", "calculate_benefit")
         workflow.add_edge("calculate_benefit", "rag_search")
         workflow.add_edge("rag_search", "simple_evaluate")
 
@@ -135,9 +164,15 @@ class SemanticRAGWorkflow:
         state["debug_path"].append("extract_variables")
 
         try:
-            variables = unemployment_logic.extract_variables_with_llm(
-                state["processed_query"]
-            )
+            # 기존 변수 추출 (LLM 검증은 다음 단계에서)
+            variables = unemployment_logic.pve.extract_all(state["processed_query"])
+            
+            # 세그멘테이션 시도
+            if unemployment_logic._is_complex_case(state["processed_query"]):
+                seg_result = unemployment_logic._extract_with_segments(state["processed_query"])
+                if seg_result:
+                    variables = seg_result
+            
             state["extracted_variables"] = variables
             logger.info(f"Variables extracted: {variables}")
         except Exception as e:
@@ -146,11 +181,110 @@ class SemanticRAGWorkflow:
 
         return state
 
+    def route_llm_verification(self, state: RAGState) -> str:
+        """LLM 검증 필요 여부 판단"""
+        if not self.llm_enabled or not config.LLM_VERIFICATION_ENABLED:
+            return "skip"
+        
+        vars = state.get("extracted_variables", {})
+        
+        # 게이트 조건 체크
+        threshold = config.LLM_VERIFICATION_THRESHOLD
+        
+        if vars.get("monthly_salary", 0) == 0:
+            logger.info("Routing to LLM verification: salary is 0")
+            return "verify"
+        
+        confidence = vars.get("confidence", {})
+        if isinstance(confidence, dict) and confidence.get("overall", 0) < threshold:
+            logger.info(f"Routing to LLM verification: low confidence")
+            return "verify"
+        
+        if not vars.get("resignation_category"):
+            logger.info("Routing to LLM verification: no resignation category")
+            return "verify"
+        
+        return "skip"
+
+    def llm_verify_variables(self, state: RAGState) -> RAGState:
+        """LLM으로 변수 검증 및 수정"""
+        state["debug_path"].append("llm_verify")
+        
+        if not self.llm_client:
+            state["llm_verified_variables"] = state["extracted_variables"]
+            return state
+        
+        try:
+            query = state["processed_query"]
+            vars = state["extracted_variables"]
+            
+            # 간소화된 프롬프트
+            prompt = f"""실업급여 변수 검증. JSON만 출력.
+
+[원본] {query}
+
+[현재값]
+- 나이: {vars.get('age')}
+- 급여: {vars.get('monthly_salary', 0)}원
+- 기간: {vars.get('eligible_months', 0)}개월
+- 퇴사: {vars.get('resignation_category')}
+
+[지시사항]
+1. 급여 0원이면 원문에서 찾기
+2. "이십일년" → 252개월
+3. 체불/폐업 → 정당한자발적/비자발적
+
+{{
+  "monthly_salary": 숫자,
+  "eligible_months": 숫자,
+  "resignation_category": "비자발적"|"정당한자발적"|"자발적"
+}}"""
+
+            messages = [
+                {"role": "system", "content": "실업급여 변수 검증 전문가. JSON만 출력."},
+                {"role": "user", "content": prompt}
+            ]
+            
+            completion = self.llm_client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=0.2,
+                max_tokens=200,
+                timeout=config.LLM_VERIFICATION_TIMEOUT
+            )
+            
+            response = completion.choices[0].message.content
+            
+            # JSON 파싱
+            import json
+            json_match = re.search(r'\{[^}]+\}', response, re.DOTALL)
+            if json_match:
+                corrected = json.loads(json_match.group(0))
+                
+                # 병합
+                verified = vars.copy()
+                for key, value in corrected.items():
+                    if value is not None:
+                        verified[key] = value
+                
+                verified["llm_verified"] = True
+                state["llm_verified_variables"] = verified
+                logger.info(f"LLM verification completed: {verified}")
+            else:
+                state["llm_verified_variables"] = vars
+                
+        except Exception as e:
+            logger.error(f"LLM verification failed: {e}")
+            state["llm_verified_variables"] = state["extracted_variables"]
+        
+        return state
+
     def calculate_benefit(self, state: RAGState) -> RAGState:
         """실업급여 계산"""
         state["debug_path"].append("calculate_benefit")
 
-        variables = state.get("extracted_variables", {})
+        # LLM 검증된 변수가 있으면 사용, 없으면 원본 사용
+        variables = state.get("llm_verified_variables") or state.get("extracted_variables", {})
         
         if not variables or not variables.get("eligible_months"):
             state["calculation_result"] = {}
@@ -167,6 +301,7 @@ class SemanticRAGWorkflow:
 
         return state
 
+    # 나머지 메서드들은 동일 (생략하지 않고 포함)
     def rag_search(self, state: RAGState) -> RAGState:
         """RAG 검색"""
         state["debug_path"].append("rag_search")
@@ -193,7 +328,6 @@ class SemanticRAGWorkflow:
         """평가 및 모드 결정 - 계산 결과 우선"""
         state["debug_path"].append("simple_evaluate")
 
-        # 계산 결과가 있으면 무조건 two_stage
         calc_result = state.get("calculation_result", {})
         if calc_result and "eligible" in calc_result:
             state["mode"] = "two_stage"
@@ -202,7 +336,6 @@ class SemanticRAGWorkflow:
             logger.info("Mode: two_stage (has calculation)")
             return state
 
-        # 계산 결과 없을 때만 RAG 점수로 판단
         try:
             from ..tokenizer import KiwiTokenizer
             tokenizer = KiwiTokenizer()
@@ -230,7 +363,6 @@ class SemanticRAGWorkflow:
         else:
             state["overlap_score"] = 0.0
 
-        # 모드 결정
         if state.get("relevance_score", 0) > 0.05:
             state["mode"] = "rag_lite"
         else:
@@ -263,13 +395,10 @@ class SemanticRAGWorkflow:
         formatted_result = unemployment_logic.format_calculation_result(calc_result)
 
         try:
-            from openai import OpenAI
-            import config
-
-            client = OpenAI(
-                base_url="https://api.together.xyz/v1",
-                api_key=config.OPENROUTER_API_KEY,
-            )
+            if not self.llm_client:
+                state["raw_answer"] = formatted_result
+                state["confidence"] = 0.8
+                return state
 
             user_prompt = f"""질문: {state['query']}
 
@@ -289,8 +418,8 @@ RAG 정보: {state.get('context', '')}
                 {"role": "user", "content": user_prompt},
             ]
 
-            completion = client.chat.completions.create(
-                model=config.MODEL,
+            completion = self.llm_client.chat.completions.create(
+                model=self.model,
                 messages=messages,
                 temperature=0.3,
                 max_tokens=400,
@@ -317,7 +446,6 @@ RAG 정보: {state.get('context', '')}
         state["debug_path"].append("generate_llm_only")
 
         try:
-            import config
             query_lower = state["query"].lower()
 
             for keyword, answer in config.FALLBACK_ANSWERS.items():
@@ -329,13 +457,10 @@ RAG 정보: {state.get('context', '')}
             pass
 
         try:
-            from openai import OpenAI
-            import config
-
-            client = OpenAI(
-                base_url="https://api.together.xyz/v1",
-                api_key=config.OPENROUTER_API_KEY,
-            )
+            if not self.llm_client:
+                state["raw_answer"] = "답변 생성에 실패했습니다."
+                state["confidence"] = 0.0
+                return state
 
             user_prompt = f"""질문: {state['query']}
 
@@ -352,8 +477,8 @@ RAG 정보: {state.get('context', '')}
                 {"role": "user", "content": user_prompt},
             ]
 
-            completion = client.chat.completions.create(
-                model=config.MODEL,
+            completion = self.llm_client.chat.completions.create(
+                model=self.model,
                 messages=messages,
                 temperature=config.MODEL_TEMPERATURE,
                 max_tokens=300,
@@ -392,13 +517,13 @@ RAG 정보: {state.get('context', '')}
         context = self.truncate_safely(state.get("context", ""), 400)
 
         try:
-            from openai import OpenAI
-            import config
-
-            client = OpenAI(
-                base_url="https://api.together.xyz/v1",
-                api_key=config.OPENROUTER_API_KEY,
-            )
+            if not self.llm_client:
+                if base_answer:
+                    state["raw_answer"] = f"{base_answer}\n\n자세한 내용은 고용센터 1350으로 문의하세요."
+                else:
+                    state["raw_answer"] = "답변 생성에 실패했습니다."
+                state["confidence"] = 0.5
+                return state
 
             if high_confidence and base_answer:
                 user_prompt = f"""[핵심 정보]
@@ -434,8 +559,8 @@ RAG 정보: {state.get('context', '')}
                 {"role": "user", "content": user_prompt},
             ]
 
-            completion = client.chat.completions.create(
-                model=config.MODEL,
+            completion = self.llm_client.chat.completions.create(
+                model=self.model,
                 messages=messages,
                 temperature=temp,
                 max_tokens=300,
@@ -485,7 +610,6 @@ RAG 정보: {state.get('context', '')}
         answer = state.get("raw_answer", "관련 정보를 찾을 수 없습니다.")
 
         try:
-            import config
             for wrong, correct in config.COMMON_MISTAKES.items():
                 answer = answer.replace(wrong, correct)
         except:
@@ -505,6 +629,7 @@ RAG 정보: {state.get('context', '')}
             "query": query,
             "processed_query": "",
             "extracted_variables": {},
+            "llm_verified_variables": {},
             "calculation_result": {},
             "documents": [],
             "relevance_score": 0.0,
@@ -534,6 +659,7 @@ RAG 정보: {state.get('context', '')}
                 "relevance_score": result.get("relevance_score", 0.0),
                 "has_calculation": bool(result.get("calculation_result")),
                 "has_variables": bool(result.get("extracted_variables")),
+                "llm_verified": bool(result.get("llm_verified_variables", {}).get("llm_verified")),
             },
         }
 

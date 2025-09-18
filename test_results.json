@@ -1,0 +1,406 @@
+[
+  {
+    "id": 1,
+    "query": "만 33세, 연봉 4200 받고 1년 2개월 근무 후 권고사직",
+    "expected": {
+      "age": 33,
+      "salary": 3500000,
+      "months": 14,
+      "resignation": "비자발적"
+    },
+    "extracted": {
+      "age": 33,
+      "monthly_salary": 3500000,
+      "eligible_months": 14,
+      "resignation_category": "비자발적",
+      "repetition_count": null,
+      "disability": false,
+      "special_reason": "권고사직"
+    },
+    "accuracy": 100.0
+  },
+  {
+    "id": 2,
+    "query": "프리랜서 2년 했는데 월 400 정도, 프로젝트 끊겼어요",
+    "expected": {
+      "age": null,
+      "salary": 4000000,
+      "months": 24,
+      "resignation": null,
+      "type": "프리랜서"
+    },
+    "extracted": {
+      "age": null,
+      "monthly_salary": 4000000,
+      "eligible_months": 24,
+      "resignation_category": null,
+      "repetition_count": null,
+      "disability": false,
+      "employment_type": "프리랜서"
+    },
+    "accuracy": 100.0
+  },
+  {
+    "id": 3,
+    "query": "56세 장애인인데 8개월 근무하다 회사가 부도났습니다",
+    "expected": {
+      "age": 56,
+      "salary": null,
+      "months": 8,
+      "resignation": "비자발적",
+      "disability": true
+    },
+    "extracted": {
+      "age": 56,
+      "monthly_salary": null,
+      "eligible_months": 8,
+      "resignation_category": "비자발적",
+      "repetition_count": null,
+      "disability": true,
+      "special_reason": "회사사정"
+    },
+    "accuracy": 100.0
+  },
+  {
+    "id": 4,
+    "query": "작년 7월부터 올해 2월까지 8개월 계약직으로 일했어요",
+    "expected": {
+      "age": null,
+      "salary": null,
+      "months": 8,
+      "resignation": null
+    },
+    "extracted": {
+      "age": null,
+      "monthly_salary": null,
+      "eligible_months": 8,
+      "resignation_category": null,
+      "repetition_count": null,
+      "disability": false
+    },
+    "accuracy": 100.0
+  },
+  {
+    "id": 5,
+    "query": "일용직으로 최근 6개월간 매달 20일 이상 일했는데 해고",
+    "expected": {
+      "age": null,
+      "salary": null,
+      "months": 6,
+      "resignation": "비자발적"
+    },
+    "extracted": {
+      "age": null,
+      "monthly_salary": null,
+      "eligible_months": 6,
+      "resignation_category": "비자발적",
+      "repetition_count": null,
+      "disability": false,
+      "special_reason": "회사사정"
+    },
+    "accuracy": 100.0
+  },
+  {
+    "id": 6,
+    "query": "50대 중반이고 월급 280만 받으며 15개월 근무, 임금체불로 퇴사",
+    "expected": {
+      "age": 55,
+      "salary": 2800000,
+      "months": 15,
+      "resignation": "정당한자발적"
+    },
+    "extracted": {
+      "age": 55,
+      "monthly_salary": 2800000,
+      "eligible_months": null,
+      "resignation_category": "정당한자발적",
+      "repetition_count": null,
+      "disability": false,
+      "special_reason": "임금체불"
+    },
+    "accuracy": 75.0
+  },
+  {
+    "id": 7,
+    "query": "3번째 수급인데 이번엔 10개월 일하고 구조조정 당했어요",
+    "expected": {
+      "age": null,
+      "salary": null,
+      "months": 10,
+      "resignation": "비자발적",
+      "repetition": 3
+    },
+    "extracted": {
+      "age": null,
+      "monthly_salary": null,
+      "eligible_months": 10,
+      "resignation_category": "비자발적",
+      "repetition_count": 3,
+      "disability": false,
+      "repetition": 3,
+      "special_reason": "회사사정"
+    },
+    "accuracy": 100.0
+  },
+  {
+    "id": 8,
+    "query": "29살, 월 220만 받고 7개월 근무했는데 상사 괴롭힘으로 사직",
+    "expected": {
+      "age": 29,
+      "salary": 2200000,
+      "months": 7,
+      "resignation": "정당한자발적"
+    },
+    "extracted": {
+      "age": 29,
+      "monthly_salary": 2200000,
+      "eligible_months": 7,
+      "resignation_category": "정당한자발적",
+      "repetition_count": null,
+      "disability": false,
+      "special_reason": "직장내괴롭힘"
+    },
+    "accuracy": 100.0
+  },
+  {
+    "id": 9,
+    "query": "계약직 2년 꽉 채우고 계약만료로 퇴직했습니다",
+    "expected": {
+      "age": null,
+      "salary": null,
+      "months": 24,
+      "resignation": "비자발적"
+    },
+    "extracted": {
+      "age": null,
+      "monthly_salary": null,
+      "eligible_months": 24,
+      "resignation_category": "비자발적",
+      "repetition_count": null,
+      "disability": false,
+      "special_reason": "회사사정"
+    },
+    "accuracy": 100.0
+  },
+  {
+    "id": 10,
+    "query": "연봉 6000 받다가 병가 잦아져서 1년 6개월만에 자진 퇴사",
+    "expected": {
+      "age": null,
+      "salary": 5000000,
+      "months": 18,
+      "resignation": "자발적"
+    },
+    "extracted": {
+      "age": null,
+      "monthly_salary": 5000000,
+      "eligible_months": 18,
+      "resignation_category": "자발적",
+      "repetition_count": null,
+      "disability": false,
+      "special_reason": "개인사정"
+    },
+    "accuracy": 100.0
+  },
+  {
+    "id": 11,
+    "query": "올해 1월 입사해서 7월에 권고사직, 월급 310",
+    "expected": {
+      "age": null,
+      "salary": 3100000,
+      "months": 6,
+      "resignation": "비자발적"
+    },
+    "extracted": {
+      "monthly_salary": 3100000,
+      "eligible_months": 6,
+      "resignation_category": "비자발적",
+      "repetition_count": null,
+      "disability": false,
+      "special_reason": "권고사직"
+    },
+    "accuracy": 100.0
+  },
+  {
+    "id": 12,
+    "query": "20년간 다닌 회사가 폐업해서 48세 나이에 퇴사했어요",
+    "expected": {
+      "age": 48,
+      "salary": null,
+      "months": 240,
+      "resignation": "비자발적"
+    },
+    "extracted": {
+      "age": 48,
+      "monthly_salary": null,
+      "eligible_months": 240,
+      "resignation_category": "비자발적",
+      "repetition_count": null,
+      "disability": false,
+      "special_reason": "회사사정"
+    },
+    "accuracy": 100.0
+  },
+  {
+    "id": 13,
+    "query": "첫 직장 1년 반, 두번째 6개월 근무 후 통근 4시간 버티다 퇴사",
+    "expected": {
+      "age": null,
+      "salary": null,
+      "months": 24,
+      "resignation": "정당한자발적"
+    },
+    "extracted": {
+      "age": null,
+      "monthly_salary": null,
+      "eligible_months": 18,
+      "resignation_category": "정당한자발적",
+      "repetition_count": 2,
+      "disability": false,
+      "repetition": 2,
+      "special_reason": "통근곤란"
+    },
+    "accuracy": 50.0
+  },
+  {
+    "id": 14,
+    "query": "장애인 60세, 월 180만 받고 7개월 근무, 임금체불로 퇴사",
+    "expected": {
+      "age": 60,
+      "salary": 1800000,
+      "months": 7,
+      "resignation": "정당한자발적",
+      "disability": true
+    },
+    "extracted": {
+      "age": 60,
+      "monthly_salary": 1800000,
+      "eligible_months": null,
+      "resignation_category": "정당한자발적",
+      "repetition_count": null,
+      "disability": true,
+      "special_reason": "임금체불"
+    },
+    "accuracy": 80.0
+  },
+  {
+    "id": 15,
+    "query": "벌써 다섯번째 수급인데 12개월 근무 후 정리해고",
+    "expected": {
+      "age": null,
+      "salary": null,
+      "months": 12,
+      "resignation": "비자발적",
+      "repetition": 5
+    },
+    "extracted": {
+      "age": null,
+      "monthly_salary": null,
+      "eligible_months": 12,
+      "resignation_category": "비자발적",
+      "repetition_count": 5,
+      "disability": false,
+      "repetition": 5,
+      "special_reason": "회사사정"
+    },
+    "accuracy": 100.0
+  },
+  {
+    "id": 16,
+    "query": "연봉 2400만원 받고 1년 근무했는데 계약연장 거절",
+    "expected": {
+      "age": null,
+      "salary": 2000000,
+      "months": 12,
+      "resignation": "비자발적"
+    },
+    "extracted": {
+      "monthly_salary": 200000,
+      "eligible_months": 12,
+      "resignation_category": null,
+      "repetition_count": null,
+      "disability": false
+    },
+    "accuracy": 33.33333333333333
+  },
+  {
+    "id": 17,
+    "query": "만 41세, 월급 270, 9개월 다니다 아파서 자발적 퇴사",
+    "expected": {
+      "age": 41,
+      "salary": 2700000,
+      "months": 9,
+      "resignation": "정당한자발적"
+    },
+    "extracted": {
+      "age": 41,
+      "monthly_salary": 2700000,
+      "eligible_months": 9,
+      "resignation_category": "정당한자발적",
+      "repetition_count": null,
+      "disability": false,
+      "special_reason": "질병/부상"
+    },
+    "accuracy": 100.0
+  },
+  {
+    "id": 18,
+    "query": "프리랜서 1년, 이후 정규직 1년, 합쳐서 2년 일함. 이번에 해고",
+    "expected": {
+      "age": null,
+      "salary": null,
+      "months": 24,
+      "resignation": "비자발적"
+    },
+    "extracted": {
+      "age": null,
+      "monthly_salary": null,
+      "eligible_months": 48,
+      "resignation_category": "비자발적",
+      "repetition_count": null,
+      "disability": false,
+      "special_reason": "회사사정",
+      "employment_type": "프리랜서"
+    },
+    "accuracy": 50.0
+  },
+  {
+    "id": 19,
+    "query": "월급 250만, 6개월 근무했는데 갑질 상사 때문에 사직",
+    "expected": {
+      "age": null,
+      "salary": 2500000,
+      "months": 6,
+      "resignation": "정당한자발적"
+    },
+    "extracted": {
+      "monthly_salary": 2500000,
+      "eligible_months": 6,
+      "resignation_category": "정당한자발적",
+      "repetition_count": null,
+      "disability": false,
+      "special_reason": "직장내괴롭힘"
+    },
+    "accuracy": 100.0
+  },
+  {
+    "id": 20,
+    "query": "55세, 월 300만 받고 5개월만 근무 후 자진 퇴사",
+    "expected": {
+      "age": 55,
+      "salary": 3000000,
+      "months": 5,
+      "resignation": "자발적"
+    },
+    "extracted": {
+      "age": 55,
+      "monthly_salary": 3000000,
+      "eligible_months": 5,
+      "resignation_category": "자발적",
+      "repetition_count": null,
+      "disability": false,
+      "special_reason": "개인사정"
+    },
+    "accuracy": 100.0
+  }
+]
