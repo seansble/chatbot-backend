@@ -771,7 +771,7 @@ def generate_ai_answer(question, calc_data=None, stream=False):
         if "부정수급" in question:
             return config.FALLBACK_ANSWERS["부정수급"]
 
-        system_prompt = config.SYSTEM_PROMPT.format(current_info=config.CURRENT_INFO)
+        system_prompt = RAGWorkflow.SYSTEM_PROMPT_BASE  # 추가
         use_premise = should_use_premise(question)
 
         user_msg = f"질문: {question}"

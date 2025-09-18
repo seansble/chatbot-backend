@@ -291,3 +291,8 @@ LOGGING_CONFIG = {
         "handlers": ["console"],
     },  # file 핸들러 제거 (Railway에서 문제 방지)
 }
+# LLM 검증 설정 (workflow.py의 LLM 검증 기능용)
+LLM_VERIFICATION_ENABLED = False  # 일단 False로 해서 에러 방지
+LLM_VERIFICATION_THRESHOLD = 0.75
+LLM_CACHE_SIZE = 1000
+LLM_VERIFICATION_TIMEOUT = 3
