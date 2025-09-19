@@ -1,11 +1,12 @@
-# backend/rag/unemployment_logic.py - v4.4 (LLM 검증 레이어 추가)
+# backend/rag/unemployment_logic.py - v4.5 (버그 수정 및 개선)
 """
-실업급여 통합 로직 모듈 v4.4
+실업급여 통합 로직 모듈 v4.5
 
-핵심 변경
-- LLMVerifier 클래스 추가: 추출된 변수 검증 및 보정
-- 게이트 조건: salary==0, confidence<0.75, resignation==None
-- JSON 스키마 검증 및 캐싱 기능 포함
+핵심 수정사항
+- None 방어 코드 추가
+- 포맷팅 에러 방지
+- LLM 검증 게이트 확대
+- 청년/장애 특례 정확히 처리
 """
 
 import re
@@ -124,7 +125,7 @@ class Segment:
     end_pos: int = 0
 
 class KiwiSegmenter:
-    ISSUE_RX = re.compile(r"(체불|미지급|못\s*받|폐업|부도|파산|갑질|괴롭힘|망했|망함)")
+    ISSUE_RX = re.compile(r"(체불|미지급|못\s*받|폐업|부도|파산|갑질|괴롭힘|맣했|망함)")
     ORD_RX = re.compile(r"(첫|두\s*번째|세\s*번째|네\s*번째|마지막|두번째|세번째|네번째)")
 
     def __init__(self):
@@ -471,7 +472,7 @@ class PrecisionVariableExtractor:
         return None
 
 # -------------------------------
-# LLM 검증 클래스 (새로 추가)
+# LLM 검증 클래스 (개선 버전)
 # -------------------------------
 class LLMVerifier:
     """LLM 기반 변수 검증 및 보정"""
@@ -507,7 +508,7 @@ class LLMVerifier:
         if not self.enabled:
             return extracted_vars
         
-        # 1. LLM 검증이 필요한지 판단
+        # 1. LLM 검증이 필요한지 판단 (확대된 게이트)
         if not self._needs_verification(extracted_vars, calc_result):
             logger.info("LLM verification skipped - confidence high enough")
             return extracted_vars
@@ -558,11 +559,17 @@ class LLMVerifier:
             return extracted_vars
     
     def _needs_verification(self, vars: Dict, calc: Dict = None) -> bool:
-        """LLM 검증 필요 여부 판단 (게이트 조건)"""
+        """LLM 검증 필요 여부 판단 (확대된 게이트 조건)"""
         
-        # 급여가 0원
-        if vars.get("monthly_salary", 0) == 0:
-            logger.info("LLM verification needed: salary is 0")
+        # 급여가 0원 또는 None
+        if not vars.get("monthly_salary") or vars.get("monthly_salary", 0) == 0:
+            logger.info("LLM verification needed: salary is 0 or None")
+            return True
+        
+        # 기간이 6개월 미만 또는 None
+        months = vars.get("eligible_months")
+        if months is None or months < 6:
+            logger.info(f"LLM verification needed: months is {months}")
             return True
         
         # 신뢰도가 낮음
@@ -578,10 +585,14 @@ class LLMVerifier:
             logger.info("LLM verification needed: resignation category unknown")
             return True
         
-        # 개월수가 너무 적거나 많음
-        months = vars.get("eligible_months", 0)
-        if months < 3 or months > 600:
-            logger.info(f"LLM verification needed: unusual months {months}")
+        # 반복수급 언급되었는데 카운트 없음
+        if vars.get("special_reason") == "반복수급" and not vars.get("repetition_count"):
+            logger.info("LLM verification needed: repetition mentioned but no count")
+            return True
+        
+        # 특수 사유가 있는 경우
+        if vars.get("special_reason") in ["임금체불", "직장내괴롭힘", "질병/부상"]:
+            logger.info("LLM verification needed: special reason exists")
             return True
         
         return False
@@ -590,40 +601,38 @@ class LLMVerifier:
         """간소화된 프롬프트 생성"""
         
         issues = []
-        if vars.get("monthly_salary", 0) == 0:
+        if not vars.get("monthly_salary") or vars.get("monthly_salary", 0) == 0:
             issues.append("급여 0원 - 원문에서 급여 찾기")
         if not vars.get("resignation_category"):
             issues.append("퇴사사유 불명 - 원문에서 확인")
-        if vars.get("eligible_months", 0) < 6:
-            issues.append("기간 너무 짧음 - 한글 년수 재확인")
+        if not vars.get("eligible_months") or vars.get("eligible_months", 0) < 6:
+            issues.append("기간 부족 - 한글 년수 재확인")
         
         prompt = f"""실업급여 변수 검증. JSON만 출력.
 
-[원본 질문]
-{query}
+[원본] {query}
 
-[현재 추출값]
+[현재값]
 - 나이: {vars.get('age')}
 - 급여: {vars.get('monthly_salary', 0)}원
 - 기간: {vars.get('eligible_months', 0)}개월
 - 퇴사: {vars.get('resignation_category')}
 - 특별사유: {vars.get('special_reason')}
-
-[문제점]
-{', '.join(issues) if issues else '없음'}
+- 반복횟수: {vars.get('repetition_count')}
 
 [지시사항]
-1. 급여가 0원이면 원문에서 "만원", "백만원" 등 찾기
-2. "이십일년" 같은 한글 표현 → 252개월로 변환
-3. 체불, 폐업 등 → 정당한자발적 또는 비자발적
+1. 급여 0원이면 원문에서 "만원", "백만원" 등 찾기
+2. "이십일년" → 252개월, "일년반" → 18개월
+3. 체불/폐업 → 정당한자발적/비자발적
+4. 청년(18-34세)과 장애인은 3개월도 가능
 
-JSON 출력:
 {{
-  "monthly_salary": <숫자 또는 null>,
-  "eligible_months": <숫자 또는 null>,
-  "resignation_category": <"비자발적"|"정당한자발적"|"자발적"|null>,
-  "special_reason": <문자열 또는 null>,
-  "confidence": <0.0-1.0>
+  "monthly_salary": 숫자 또는 null,
+  "eligible_months": 숫자 또는 null,
+  "resignation_category": "비자발적"|"정당한자발적"|"자발적"|null,
+  "special_reason": 문자열 또는 null,
+  "repetition_count": 숫자 또는 null,
+  "confidence": 0.0-1.0
 }}"""
         
         return prompt
@@ -663,6 +672,12 @@ JSON 출력:
             if "special_reason" in data and data["special_reason"]:
                 validated["special_reason"] = str(data["special_reason"])
             
+            # 반복 횟수
+            if "repetition_count" in data and data["repetition_count"] is not None:
+                count = int(data["repetition_count"])
+                if 1 <= count <= 10:
+                    validated["repetition_count"] = count
+            
             # 신뢰도
             if "confidence" in data:
                 validated["llm_confidence"] = float(data.get("confidence", 0.5))
@@ -689,7 +704,7 @@ JSON 출력:
                 if key in original and original[key]:
                     orig_val = original[key]
                     if isinstance(orig_val, (int, float)) and isinstance(value, (int, float)):
-                        if abs(orig_val - value) / max(orig_val, value) > 0.5:
+                        if abs(orig_val - value) / max(orig_val, value, 1) > 0.5:
                             logger.info(f"Large change in {key}: {orig_val} → {value}")
                 
                 result[key] = value
@@ -712,23 +727,17 @@ JSON 출력:
     
     def _get_cache_key(self, query: str) -> str:
         """캐시 키 생성"""
-        # 간단한 해시 (실제로는 더 정교한 방법 사용 권장)
         import hashlib
         return hashlib.md5(query.encode()).hexdigest()[:16]
-    
-    @lru_cache(maxsize=1000)
-    def _cached_verification(self, query_hash: str) -> Optional[Dict]:
-        """LRU 캐시 데코레이터 활용"""
-        return self.cache.get(query_hash)
 
 # -------------------------------
-# 메인 통합 로직
+# 메인 통합 로직 (수정 버전)
 # -------------------------------
 class UnemploymentLogic:
     DAILY_MAX = 66_000
     DAILY_MIN = 64_192
-    YOUTH = (18, 34)
-    REP_PENALTY = {1:1.0, 2:1.0, 3:0.9, 4:0.75, 5:0.6, 6:0.5}
+    YOUTH = (18, 34)  # 청년 범위 18-34세
+    REP_PENALTY = {1:1.0, 2:1.0, 3:0.9, 4:0.75, 5:0.6, 6:0.5}  # 반복수급 감액률
 
     AMBIGUOUS = {
         "얼마전": (3, 3, 0.5), "최근": (3, 3, 0.6), "꽤오래": (18, 18, 0.5),
@@ -775,6 +784,11 @@ class UnemploymentLogic:
         return extracted
 
     def calculate_benefit_days(self, age: int, months: int, disability: bool = False) -> int:
+        """수급 일수 계산 (청년/장애 특례 포함)"""
+        # None 방어
+        age = int(age or 35)
+        months = int(months or 0)
+        
         if disability and age >= 50:
             return 270
         if age < 30:
@@ -792,6 +806,11 @@ class UnemploymentLogic:
         return days
 
     def calculate_daily_amount(self, monthly_salary: int, age: int) -> Dict[str, Any]:
+        """일 급여액 계산 (청년 가산 포함)"""
+        # None 방어
+        monthly_salary = int(monthly_salary or 0)
+        age = int(age or 35)
+        
         if not monthly_salary:
             return {"daily_base": 0, "daily_benefit": 0, "applied": "계산불가"}
         base = monthly_salary / 30
@@ -805,17 +824,23 @@ class UnemploymentLogic:
                 "applied": "60%" + (" + 청년가산" if self.YOUTH[0] <= age <= self.YOUTH[1] else "")}
 
     def calculate_total_benefit(self, variables: Dict[str, Any]) -> Dict[str, Any]:
-        age = variables.get("age", 35)
-        salary = variables.get("monthly_salary", 0)
-        months = variables.get("eligible_months", 0)
+        """실업급여 계산 (None 방어 포함)"""
+        # None 방어 코드
+        age = int(variables.get("age") or 35)
+        salary = int(variables.get("monthly_salary") or 0)
+        months = int(variables.get("eligible_months") or 0)
         resignation = variables.get("resignation_category", "")
-        repetition = variables.get("repetition_count", 1)
-        disability = variables.get("disability", False)
+        repetition = int(variables.get("repetition_count") or 1)
+        disability = bool(variables.get("disability", False))
 
+        # 청년/장애 특례 체크
         is_youth = self.YOUTH[0] <= age <= self.YOUTH[1]
-        min_months = 3 if is_youth else 6
+        min_months = 3 if (is_youth or disability) else 6
+        
         if months < min_months:
-            return {"eligible": False, "reason": f"고용보험 {months}개월 < 최소 {min_months}개월", "is_youth": is_youth}
+            return {"eligible": False, "reason": f"고용보험 {months}개월 < 최소 {min_months}개월", 
+                   "is_youth": is_youth, "disability": disability}
+        
         if resignation == "자발적":
             return {"eligible": False, "reason": "단순 자발적 퇴사는 수급 불가"}
 
@@ -849,22 +874,23 @@ class UnemploymentLogic:
         }
 
     def format_calculation_result(self, result: Dict[str, Any]) -> str:
-        """결과 포맷팅"""
+        """결과 포맷팅 (None 방어 포함)"""
         if not result.get("eligible"):
-            return f"❌ 수급 불가: {result.get('reason')}"
+            return f"⛔ 수급 불가: {result.get('reason')}"
         
+        # None 방어 포맷팅
         lines = [
             "✅ **실업급여 계산 완료** (2025년 기준)",
             "",
             f"📋 **기본 정보**",
-            f"- 나이: {result['age']}세" + (" (청년 특례)" if result.get('is_youth') else ""),
-            f"- 가입 기간: {result['eligible_months']}개월",
-            f"- 월급: {result['monthly_salary']:,}원",
+            f"- 나이: {result.get('age', 0)}세" + (" (청년 특례)" if result.get('is_youth') else "") + (" (장애 특례)" if result.get('disability') else ""),
+            f"- 가입 기간: {result.get('eligible_months', 0)}개월",
+            f"- 월급: {(result.get('monthly_salary') or 0):,}원",
             "",
             f"💰 **수급 내역**",
-            f"- 일 급여액: {result['daily_benefit']:,}원 ({result['applied_limit']})",
-            f"- 수급 기간: {result['benefit_days']}일",
-            f"- **총 수급액: {result['total_amount']:,}원**",
+            f"- 일 급여액: {(result.get('daily_benefit') or 0):,}원 ({result.get('applied_limit', '')})",
+            f"- 수급 기간: {result.get('benefit_days', 0)}일",
+            f"- **총 수급액: {(result.get('total_amount') or 0):,}원**",
         ]
         
         if result.get("reduction_info"):
@@ -873,7 +899,7 @@ class UnemploymentLogic:
         
         if result.get("llm_verified"):
             lines.append("")
-            lines.append("✓ LLM 검증 완료")
+            lines.append("✔ LLM 검증 완료")
         
         confidence = result.get("confidence", {})
         if isinstance(confidence, dict) and confidence.get("overall"):
@@ -882,7 +908,7 @@ class UnemploymentLogic:
         
         return "\n".join(lines)
 
-    # 내부 메서드들은 동일 (생략)
+    # 내부 메서드들 (동일하게 유지, 생략하지 않음)
     def _is_complex_case(self, text: str) -> bool:
         signals = [
             ("첫" in text and ("두번째" in text or "세번째" in text)),

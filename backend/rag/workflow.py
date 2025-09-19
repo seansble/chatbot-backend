@@ -1,5 +1,5 @@
 ﻿# backend/rag/workflow.py
-"""통합 RAG 워크플로우 - 변수 추출 + LLM 검증 중심"""
+"""통합 RAG 워크플로우 - 개선된 버전"""
 
 from typing import Dict, List, TypedDict, Optional, Any
 from langgraph.graph import StateGraph, END
@@ -21,7 +21,7 @@ class RAGState(TypedDict):
     query: str
     processed_query: str
     extracted_variables: Dict[str, Any]
-    llm_verified_variables: Dict[str, Any]  # LLM 검증된 변수 추가
+    llm_verified_variables: Dict[str, Any]  # LLM 검증된 변수
     calculation_result: Dict[str, Any]
     documents: List[Dict]
     relevance_score: float
@@ -39,17 +39,27 @@ class RAGState(TypedDict):
 class SemanticRAGWorkflow:
     """통합 RAG 워크플로우"""
 
+    # 확장된 시스템 프롬프트
     SYSTEM_PROMPT_BASE = """당신은 한국 실업급여 전문 상담사입니다.
 
 [2025년 확정 정보]
 - 일 상한액: 66,000원 (절대 69,000원 아님)
 - 일 하한액: 64,192원
-- 가입조건: 18개월 중 180일 이상
+- 가입조건: 18개월 중 180일 이상 (18개월 모두 가입 필요 없음)
 - 지급률: 평균임금의 60%
+- 청년(18-34세): 10% 추가 지급, 최소 3개월 가능
+- 장애인: 조건 완화, 최소 3개월 가능
+
+[중요 규정]
+- 비자발적 퇴사: 권고사직, 해고, 계약만료, 폐업
+- 정당한 자발적: 임금체불 2개월↑, 괴롭힘, 질병 4주↑
+- 반복수급: 5년 이내 횟수에 따라 감액 (고용센터 심사)
+- 신청기한: 퇴사 후 1년 이내
 
 [답변 스타일]
 - 결론부터 명확히 (가능/불가능)
 - 핵심은 **볼드체** 강조
+- 근거는 고용보험법 등 언급 가능
 - 친근한 어투로 자연스럽게
 - 400자 내외"""
 
@@ -59,6 +69,7 @@ class SemanticRAGWorkflow:
 이미 계산된 결과를 자연스럽고 친근하게 설명하기
 추가 계산 절대 금지 (이미 완료됨)
 제공된 숫자 그대로 사용
+관련 법령이나 규정은 언급 가능
 
 400자 이내, 친근한 존댓말"""
 
@@ -88,7 +99,7 @@ class SemanticRAGWorkflow:
         # 노드 정의
         workflow.add_node("analyze_query", self.analyze_query)
         workflow.add_node("extract_variables", self.extract_variables)
-        workflow.add_node("llm_verify", self.llm_verify_variables)  # 새 노드 추가
+        workflow.add_node("llm_verify", self.llm_verify_variables)
         workflow.add_node("calculate_benefit", self.calculate_benefit)
         workflow.add_node("rag_search", self.rag_search)
         workflow.add_node("simple_evaluate", self.simple_evaluate)
@@ -182,26 +193,47 @@ class SemanticRAGWorkflow:
         return state
 
     def route_llm_verification(self, state: RAGState) -> str:
-        """LLM 검증 필요 여부 판단"""
+        """LLM 검증 필요 여부 판단 (확대된 게이트)"""
         if not self.llm_enabled or not config.LLM_VERIFICATION_ENABLED:
             return "skip"
         
         vars = state.get("extracted_variables", {})
         
-        # 게이트 조건 체크
+        # 확대된 게이트 조건
         threshold = config.LLM_VERIFICATION_THRESHOLD
         
-        if vars.get("monthly_salary", 0) == 0:
-            logger.info("Routing to LLM verification: salary is 0")
+        # 급여가 0 또는 None
+        if not vars.get("monthly_salary") or vars.get("monthly_salary", 0) == 0:
+            logger.info("Routing to LLM verification: salary is 0 or None")
             return "verify"
         
+        # 기간이 6개월 미만
+        months = vars.get("eligible_months")
+        if months is None or months < 6:
+            logger.info(f"Routing to LLM verification: months is {months}")
+            return "verify"
+        
+        # 신뢰도가 낮음
         confidence = vars.get("confidence", {})
         if isinstance(confidence, dict) and confidence.get("overall", 0) < threshold:
             logger.info(f"Routing to LLM verification: low confidence")
             return "verify"
         
+        # 퇴사사유 없음
         if not vars.get("resignation_category"):
             logger.info("Routing to LLM verification: no resignation category")
+            return "verify"
+        
+        # 반복수급 언급됨
+        query_lower = state["processed_query"].lower()
+        if any(word in query_lower for word in ["반복", "세번째", "네번째", "다섯번째"]):
+            if not vars.get("repetition_count"):
+                logger.info("Routing to LLM verification: repetition mentioned")
+                return "verify"
+        
+        # 특수 상황
+        if any(word in query_lower for word in ["체불", "괴롭힘", "폐업", "육아", "간병"]):
+            logger.info("Routing to LLM verification: special situation")
             return "verify"
         
         return "skip"
@@ -228,16 +260,19 @@ class SemanticRAGWorkflow:
 - 급여: {vars.get('monthly_salary', 0)}원
 - 기간: {vars.get('eligible_months', 0)}개월
 - 퇴사: {vars.get('resignation_category')}
+- 반복: {vars.get('repetition_count')}
 
-[지시사항]
-1. 급여 0원이면 원문에서 찾기
+[중요]
+1. 급여 0원이면 "만원", "백만원" 찾기
 2. "이십일년" → 252개월
 3. 체불/폐업 → 정당한자발적/비자발적
+4. 청년(18-34세)과 장애인은 3개월도 가능
 
 {{
   "monthly_salary": 숫자,
   "eligible_months": 숫자,
-  "resignation_category": "비자발적"|"정당한자발적"|"자발적"
+  "resignation_category": "비자발적"|"정당한자발적"|"자발적",
+  "repetition_count": 숫자 또는 null
 }}"""
 
             messages = [
@@ -280,15 +315,15 @@ class SemanticRAGWorkflow:
         return state
 
     def calculate_benefit(self, state: RAGState) -> RAGState:
-        """실업급여 계산"""
+        """실업급여 계산 (None 방어 포함)"""
         state["debug_path"].append("calculate_benefit")
 
         # LLM 검증된 변수가 있으면 사용, 없으면 원본 사용
         variables = state.get("llm_verified_variables") or state.get("extracted_variables", {})
         
-        if not variables or not variables.get("eligible_months"):
+        if not variables:
             state["calculation_result"] = {}
-            logger.info("No valid variables for calculation")
+            logger.info("No variables for calculation")
             return state
 
         try:
@@ -301,19 +336,21 @@ class SemanticRAGWorkflow:
 
         return state
 
-    # 나머지 메서드들은 동일 (생략하지 않고 포함)
     def rag_search(self, state: RAGState) -> RAGState:
-        """RAG 검색"""
+        """RAG 검색 (개선된 파라미터)"""
         state["debug_path"].append("rag_search")
         query = state["processed_query"]
 
-        results = self.retriever.retrieve(query, top_k=3)
+        # 개선된 검색 파라미터 사용
+        top_k = getattr(config, 'RAG_SEARCH_TOP_K', 10)
+        results = self.retriever.retrieve(query, top_k=top_k)
 
         state["documents"] = results
         state["relevance_score"] = results[0]["score"] if results else 0.0
 
+        # 더 많은 문서 사용
         context_parts = []
-        for i, doc in enumerate(results[:2], 1):
+        for i, doc in enumerate(results[:5], 1):  # 2개 → 5개로 증가
             parent = doc.get("parent_text", doc["text"])
             context_parts.append(f"[정보 {i}]\n{parent}")
 
@@ -325,7 +362,7 @@ class SemanticRAGWorkflow:
         return state
 
     def simple_evaluate(self, state: RAGState) -> RAGState:
-        """평가 및 모드 결정 - 계산 결과 우선"""
+        """평가 및 모드 결정 (개선된 임계값)"""
         state["debug_path"].append("simple_evaluate")
 
         calc_result = state.get("calculation_result", {})
@@ -348,6 +385,7 @@ class SemanticRAGWorkflow:
         important_keywords = {
             "실업급여", "권고사직", "자격", "금액", "기간", "조건",
             "반복수급", "조기재취업", "구직활동", "180일", "하한액", "상한액",
+            "청년", "장애", "체불", "폐업", "계약만료",
         }
         
         query_important = query_tokens & important_keywords
@@ -363,7 +401,13 @@ class SemanticRAGWorkflow:
         else:
             state["overlap_score"] = 0.0
 
-        if state.get("relevance_score", 0) > 0.05:
+        # 개선된 임계값 사용
+        high_confidence_threshold = getattr(config, 'RAG_HIGH_CONFIDENCE_THRESHOLD', 0.3)
+        min_hit_ratio = getattr(config, 'RAG_MIN_HIT_RATIO', 0.4)
+        
+        if state.get("relevance_score", 0) > high_confidence_threshold and state["hit_ratio"] >= min_hit_ratio:
+            state["mode"] = "rag_lite"
+        elif state.get("relevance_score", 0) > 0.05:
             state["mode"] = "rag_lite"
         else:
             state["mode"] = "llm_only"
@@ -407,9 +451,10 @@ class SemanticRAGWorkflow:
 RAG 정보: {state.get('context', '')}
 
 [지시사항]
-- RAG 정보를 확인하고, 위 계산 결과가 포함되어 있지 않다면 보완하세요
-- 계산 결과는 완전한 문장이므로 그대로 활용 가능
-- 자연스럽게 통합하여 400자 이내로 작성
+- 계산 결과를 자연스럽게 설명
+- RAG 정보로 보완 가능
+- 관련 규정이나 조항 언급 가능
+- 400자 이내
 
 답변:"""
 
@@ -467,13 +512,13 @@ RAG 정보: {state.get('context', '')}
 [답변 작성 규칙]
 1. 첫 문장: 핵심 답변 (가능/불가능/금액)
 2. 둘째 문장: 주요 조건이나 근거
-3. 셋째 문장: 주의사항
+3. 셋째 문장: 주의사항이나 관련 규정
 4. 반드시 400자 이내로 완결
 
 답변:"""
 
             messages = [
-                {"role": "system", "content": "실업급여 전문가. 간결하고 명확하게."},
+                {"role": "system", "content": self.SYSTEM_PROMPT_BASE},
                 {"role": "user", "content": user_prompt},
             ]
 
@@ -502,10 +547,15 @@ RAG 정보: {state.get('context', '')}
         return state
 
     def generate_rag_lite(self, state: RAGState) -> RAGState:
-        """RAG lite 모드"""
+        """RAG lite 모드 (개선된 버전)"""
         state["debug_path"].append("generate_rag_lite")
 
-        high_confidence = state.get("relevance_score", 0) > 0.12
+        # 개선된 임계값 사용
+        high_confidence_threshold = getattr(config, 'RAG_HIGH_CONFIDENCE_THRESHOLD', 0.3)
+        min_hit_ratio = getattr(config, 'RAG_MIN_HIT_RATIO', 0.4)
+        
+        high_confidence = (state.get("relevance_score", 0) > high_confidence_threshold and 
+                          state.get("hit_ratio", 0) >= min_hit_ratio)
 
         base_answer = ""
         parent_text = ""
@@ -514,7 +564,7 @@ RAG 정보: {state.get('context', '')}
             base_answer = doc.get("answer", "")
             parent_text = doc.get("parent_text", "")
 
-        context = self.truncate_safely(state.get("context", ""), 400)
+        context = self.truncate_safely(state.get("context", ""), 600)  # 더 많은 컨텍스트
 
         try:
             if not self.llm_client:
@@ -535,7 +585,7 @@ RAG 정보: {state.get('context', '')}
 [사용자 질문]
 {state['query']}
 
-질문의 맥락에 맞게 자연스럽게 설명하고 400자 이내로 답변:"""
+질문의 맥락에 맞게 자연스럽게 설명하고 관련 규정 언급 가능. 400자 이내:"""
                 
                 temp = 0.2
 
@@ -548,7 +598,8 @@ RAG 정보: {state.get('context', '')}
 
 [2025년 정확한 정보]
 - 상한액: 66,000원, 하한액: 64,192원
-- 조건: 18개월 중 180일
+- 조건: 18개월 중 180일 (모두 가입 필요 없음)
+- 청년/장애 특례: 3개월 가능
 
 전문가로서 정확한 답변 (400자 이내):"""
                 

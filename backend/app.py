@@ -1,4 +1,4 @@
-# backend/app.py 맨 위에 추가
+# backend/app.py
 import sys
 import traceback
 
@@ -25,7 +25,7 @@ try:
     
 except Exception as e:
     print("="*60)
-    print(f"❌ IMPORT ERROR: {e}")
+    print(f"✗ IMPORT ERROR: {e}")
     print("="*60)
     traceback.print_exc()
     print("="*60)
@@ -434,8 +434,6 @@ def get_user_keys(request, fingerprint):
     return keys
 
 
-# backend/app.py의 is_unemployment_related 함수 수정 (약 1020번째 줄)
-
 def is_unemployment_related(question):
     """실업급여 관련 질문인지 엄격하게 체크"""
     
@@ -483,7 +481,7 @@ def is_unemployment_related(question):
     has_work_pattern = bool(re.search(r'\d+\s*(개월|년|만\s*원|만원|일|살)', question_lower))
     
     # 필수 키워드가 있거나 근무 패턴이 있어야만 통과
-    return has_required or has_work_pattern  # 둘 중 하나라도 있어야 True
+    return has_required or has_work_pattern
 
 
 def check_malicious_input(text):
@@ -638,10 +636,12 @@ def should_use_premise(question):
 
 def validate_answer(answer, question):
     """답변 검증 및 교정"""
+    # 반복수급 정보 개선
     if "반복수급" in question or "네 번째" in question or "4회" in question:
         if "30%" in answer or "3회 이상" in answer:
             return config.FALLBACK_ANSWERS.get("반복수급_감액", answer)
 
+    # 잘못된 금액 수정
     if "63,816원" in answer:
         answer = answer.replace("63,816원", "64,192원")
     if "68,640원" in answer:
@@ -674,16 +674,8 @@ def generate_ai_answer_with_rag(question, calc_data=None):
         if len(question) < 100 and detect_amount_intent(question) == "AMOUNT_CALC":
             return config.FALLBACK_ANSWERS["금액_계산_금지"]
 
-        # 3. 6개월 미만 체크
-        if "년" not in question:
-            month_match = re.search(r"(\d+)\s*개월", question)
-            if month_match:
-                months = int(month_match.group(1))
-                if months < 6:
-                    return """고용보험 가입기간이 180일(6개월) 이상이어야 실업급여 수급이 가능합니다. 
-6개월 미만 근무시에는 수급 자격이 없습니다.
-
-자세한 상담: 고용노동부 1350"""
+        # 3. 6개월 미만 체크 삭제 - 계산 모듈에 위임
+        # 청년/장애 특례를 막는 하드코딩 제거됨
 
         # 4. 부정수급 경고
         if "부정수급" in question:
@@ -736,7 +728,7 @@ def generate_ai_answer_with_rag(question, calc_data=None):
         output_tokens = len(answer) * 2
 
         # 비용 추적 (LLM 사용한 경우만)
-        if method in ["enhanced", "regenerated"]:
+        if method in ["enhanced", "regenerated", "two_stage", "rag_lite"]:
             cost_tracker.track_api_call(input_tokens, output_tokens)
 
         # 12. DB 저장
@@ -758,20 +750,12 @@ def generate_ai_answer(question, calc_data=None, stream=False):
         if detect_amount_intent(question) == "AMOUNT_CALC":
             return config.FALLBACK_ANSWERS["금액_계산_금지"]
 
-        if "년" not in question:
-            month_match = re.search(r"(\d+)\s*개월", question)
-            if month_match:
-                months = int(month_match.group(1))
-                if months < 6:
-                    return """고용보험 가입기간이 180일(6개월) 이상이어야 실업급여 수급이 가능합니다. 
-6개월 미만 근무시에는 수급 자격이 없습니다.
-
-자세한 상담: 고용노동부 1350"""
+        # 6개월 미만 체크 삭제 - 계산 모듈에 위임
 
         if "부정수급" in question:
             return config.FALLBACK_ANSWERS["부정수급"]
 
-        system_prompt = RAGWorkflow.SYSTEM_PROMPT_BASE  # 추가
+        system_prompt = RAGWorkflow.SYSTEM_PROMPT_BASE
         use_premise = should_use_premise(question)
 
         user_msg = f"질문: {question}"
@@ -788,7 +772,8 @@ def generate_ai_answer(question, calc_data=None, stream=False):
         else:
             user_msg += '\n\n지침: 이 질문은 구체적 상황이므로 "실업급여 조건이 충족된다는 전제 하에"를 사용하지 마세요.'
 
-        user_msg += "\n\n⚠️ 중요: 계산기 링크나 고용센터 안내를 직접 하지 마세요. URL을 생성하지 마세요. 순수한 답변만 제공하세요."
+        # 근거 제시 허용으로 변경
+        user_msg += "\n\n⚠️ 중요: 관련 법령이나 규정을 언급할 수 있지만, 직접 링크는 생성하지 마세요."
 
         client = OpenAI(
             base_url="https://api.together.xyz/v1",
@@ -861,7 +846,7 @@ def postprocess_answer(answer):
     return answer + tag_buttons
 
 
-# API 엔드포인트들
+# API 엔드포인트들은 그대로 유지
 @app.route("/api/stats", methods=["GET"])
 def get_stats():
     """사이트 통계 조회"""
@@ -1201,7 +1186,7 @@ def chat():
                 remaining = 999
             
             return jsonify({
-                "answer": "실업급여 관련 질문만 답변 가능합니다...",
+                "answer": "실업급여 관련 질문만 답변 가능합니다. 고용보험, 퇴사, 수급 조건 등에 대해 물어보세요.",
                 "remaining": remaining,  # 현재 남은 횟수만 표시
                 "is_new_user": is_new
             })
@@ -1211,7 +1196,7 @@ def chat():
             can_use, remaining = check_token_usage(token, is_new)
 
             if not can_use:
-                error_msg = "일일 3회 초과. 내일 다시 이용하세요"  # 통일된 메시지
+                error_msg = "일일 3회 초과. 내일 다시 이용하세요"
 
                 return (
                     jsonify(
