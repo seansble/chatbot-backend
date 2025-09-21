@@ -1,5 +1,5 @@
 ﻿# backend/rag/workflow.py
-"""통합 RAG 워크플로우 - 개선된 버전"""
+"""통합 RAG 워크플로우 - GPT 권고사항 반영"""
 
 from typing import Dict, List, TypedDict, Optional, Any
 from langgraph.graph import StateGraph, END
@@ -39,7 +39,7 @@ class RAGState(TypedDict):
 class SemanticRAGWorkflow:
     """통합 RAG 워크플로우"""
 
-    # 확장된 시스템 프롬프트
+    # 시스템 프롬프트
     SYSTEM_PROMPT_BASE = """당신은 한국 실업급여 전문 상담사입니다.
 
 [2025년 확정 정보]
@@ -80,8 +80,8 @@ class SemanticRAGWorkflow:
         try:
             from openai import OpenAI
             self.llm_client = OpenAI(
-                base_url="https://api.together.xyz/v1",
-                api_key=config.OPENROUTER_API_KEY,
+                base_url=config.API_BASE_URL,
+                api_key=config.TOGETHER_API_KEY,
             )
             self.model = config.MODEL
             self.llm_enabled = True
@@ -144,7 +144,7 @@ class SemanticRAGWorkflow:
         return workflow.compile()
 
     def analyze_query(self, state: RAGState) -> RAGState:
-        """쿼리 전처리"""
+        """쿼리 전처리 (개선된 치환)"""
         query = state["query"]
         state["debug_path"] = ["analyze_query"]
 
@@ -154,7 +154,7 @@ class SemanticRAGWorkflow:
             "잘렸": "해고",
             "얼마나": "얼마",
             "언제부터": "언제",
-            "되나요": "가능",
+            "되나요": "가능한가요",  # "가능"이 아닌 "가능한가요"로 변경
             "받을 수 있": "수급 가능",
             "그만뒀": "퇴사",
             "그만둬": "퇴사",
@@ -171,52 +171,58 @@ class SemanticRAGWorkflow:
         return state
 
     def extract_variables(self, state: RAGState) -> RAGState:
-        """변수 추출 - 모든 질문에서 시도"""
+        """변수 추출 - 전체 파이프라인 사용 (GPT 권고)"""
         state["debug_path"].append("extract_variables")
 
         try:
-            # 기존 변수 추출 (LLM 검증은 다음 단계에서)
-            variables = unemployment_logic.pve.extract_all(state["processed_query"])
+            # 전체 파이프라인 사용 (pve만 쓰지 않음)
+            variables = unemployment_logic.extract_variables_with_llm(
+                state["processed_query"]
+            )
             
-            # 세그멘테이션 시도
-            if unemployment_logic._is_complex_case(state["processed_query"]):
-                seg_result = unemployment_logic._extract_with_segments(state["processed_query"])
-                if seg_result:
-                    variables = seg_result
+            # 실패시 폴백
+            if not variables:
+                variables = unemployment_logic.pve.extract_all(
+                    state["processed_query"]
+                )
             
             state["extracted_variables"] = variables
             logger.info(f"Variables extracted: {variables}")
         except Exception as e:
             logger.error(f"Variable extraction failed: {e}")
-            state["extracted_variables"] = {}
+            # 최후의 폴백
+            state["extracted_variables"] = unemployment_logic.pve.extract_all(
+                state["processed_query"]
+            )
 
         return state
 
     def route_llm_verification(self, state: RAGState) -> str:
-        """LLM 검증 필요 여부 판단 (확대된 게이트)"""
+        """LLM 검증 필요 여부 판단 (개선된 게이트)"""
         if not self.llm_enabled or not config.LLM_VERIFICATION_ENABLED:
             return "skip"
         
         vars = state.get("extracted_variables", {})
+        query = state["processed_query"]
         
-        # 확대된 게이트 조건
-        threshold = config.LLM_VERIFICATION_THRESHOLD
+        # 나이와 장애 여부 확인
+        age = vars.get("age", 25)
+        disability = vars.get("disability", False)
+        is_youth = 18 <= age <= 34
         
-        # 급여가 0 또는 None
+        # 최소 개월수 계산 (청년/장애 특례 반영)
+        min_months = 3 if (is_youth or disability) else 6
+        
+        # 급여가 0원이고 금액 표식이 있을 때만
         if not vars.get("monthly_salary") or vars.get("monthly_salary", 0) == 0:
-            logger.info("Routing to LLM verification: salary is 0 or None")
-            return "verify"
+            if any(word in query for word in ["만원", "백만원", "천만원", "만 원"]):
+                logger.info("Routing to LLM verification: salary is 0 but amount markers exist")
+                return "verify"
         
-        # 기간이 6개월 미만
+        # 기간이 최소 개월수 미만일 때만
         months = vars.get("eligible_months")
-        if months is None or months < 6:
-            logger.info(f"Routing to LLM verification: months is {months}")
-            return "verify"
-        
-        # 신뢰도가 낮음
-        confidence = vars.get("confidence", {})
-        if isinstance(confidence, dict) and confidence.get("overall", 0) < threshold:
-            logger.info(f"Routing to LLM verification: low confidence")
+        if months is None or months < min_months:
+            logger.info(f"Routing to LLM verification: months {months} < min {min_months}")
             return "verify"
         
         # 퇴사사유 없음
@@ -225,21 +231,20 @@ class SemanticRAGWorkflow:
             return "verify"
         
         # 반복수급 언급됨
-        query_lower = state["processed_query"].lower()
-        if any(word in query_lower for word in ["반복", "세번째", "네번째", "다섯번째"]):
+        if any(word in query for word in ["반복", "세번째", "네번째", "다섯번째"]):
             if not vars.get("repetition_count"):
                 logger.info("Routing to LLM verification: repetition mentioned")
                 return "verify"
         
         # 특수 상황
-        if any(word in query_lower for word in ["체불", "괴롭힘", "폐업", "육아", "간병"]):
+        if any(word in query for word in ["체불", "괴롭힘", "폐업", "육아", "간병"]):
             logger.info("Routing to LLM verification: special situation")
             return "verify"
         
         return "skip"
 
     def llm_verify_variables(self, state: RAGState) -> RAGState:
-        """LLM으로 변수 검증 및 수정"""
+        """LLM으로 변수 검증 및 수정 (타임아웃 5초)"""
         state["debug_path"].append("llm_verify")
         
         if not self.llm_client:
@@ -269,9 +274,10 @@ class SemanticRAGWorkflow:
 4. 청년(18-34세)과 장애인은 3개월도 가능
 
 {{
-  "monthly_salary": 숫자,
-  "eligible_months": 숫자,
-  "resignation_category": "비자발적"|"정당한자발적"|"자발적",
+  "age": 숫자 또는 null,
+  "monthly_salary": 숫자 또는 null,
+  "eligible_months": 숫자 또는 null,
+  "resignation_category": "비자발적"|"정당한자발적"|"자발적"|null,
   "repetition_count": 숫자 또는 null
 }}"""
 
@@ -285,7 +291,7 @@ class SemanticRAGWorkflow:
                 messages=messages,
                 temperature=0.2,
                 max_tokens=200,
-                timeout=config.LLM_VERIFICATION_TIMEOUT
+                timeout=5  # 5초 고정
             )
             
             response = completion.choices[0].message.content
@@ -315,7 +321,7 @@ class SemanticRAGWorkflow:
         return state
 
     def calculate_benefit(self, state: RAGState) -> RAGState:
-        """실업급여 계산 (None 방어 포함)"""
+        """실업급여 계산"""
         state["debug_path"].append("calculate_benefit")
 
         # LLM 검증된 변수가 있으면 사용, 없으면 원본 사용
@@ -337,20 +343,20 @@ class SemanticRAGWorkflow:
         return state
 
     def rag_search(self, state: RAGState) -> RAGState:
-        """RAG 검색 (개선된 파라미터)"""
+        """RAG 검색 (문서 5개로 축소)"""
         state["debug_path"].append("rag_search")
         query = state["processed_query"]
 
-        # 개선된 검색 파라미터 사용
-        top_k = getattr(config, 'RAG_SEARCH_TOP_K', 10)
+        # 검색 문서 수 축소 (10 → 5)
+        top_k = 5
         results = self.retriever.retrieve(query, top_k=top_k)
 
         state["documents"] = results
         state["relevance_score"] = results[0]["score"] if results else 0.0
 
-        # 더 많은 문서 사용
+        # 상위 3개 문서만 사용
         context_parts = []
-        for i, doc in enumerate(results[:5], 1):  # 2개 → 5개로 증가
+        for i, doc in enumerate(results[:3], 1):
             parent = doc.get("parent_text", doc["text"])
             context_parts.append(f"[정보 {i}]\n{parent}")
 
@@ -362,7 +368,7 @@ class SemanticRAGWorkflow:
         return state
 
     def simple_evaluate(self, state: RAGState) -> RAGState:
-        """평가 및 모드 결정 (개선된 임계값)"""
+        """평가 및 모드 결정"""
         state["debug_path"].append("simple_evaluate")
 
         calc_result = state.get("calculation_result", {})
@@ -452,8 +458,8 @@ RAG 정보: {state.get('context', '')}
 
 [지시사항]
 - 계산 결과를 자연스럽게 설명
-- RAG 정보로 보완 가능
-- 관련 규정이나 조항 언급 가능
+- 추가 계산 절대 금지
+- 제공된 숫자 그대로 사용
 - 400자 이내
 
 답변:"""
@@ -468,7 +474,7 @@ RAG 정보: {state.get('context', '')}
                 messages=messages,
                 temperature=0.3,
                 max_tokens=400,
-                timeout=15,
+                timeout=10,
             )
 
             raw_answer = completion.choices[0].message.content
@@ -547,7 +553,7 @@ RAG 정보: {state.get('context', '')}
         return state
 
     def generate_rag_lite(self, state: RAGState) -> RAGState:
-        """RAG lite 모드 (개선된 버전)"""
+        """RAG lite 모드"""
         state["debug_path"].append("generate_rag_lite")
 
         # 개선된 임계값 사용
@@ -564,7 +570,7 @@ RAG 정보: {state.get('context', '')}
             base_answer = doc.get("answer", "")
             parent_text = doc.get("parent_text", "")
 
-        context = self.truncate_safely(state.get("context", ""), 600)  # 더 많은 컨텍스트
+        context = self.truncate_safely(state.get("context", ""), 600)
 
         try:
             if not self.llm_client:
@@ -598,7 +604,7 @@ RAG 정보: {state.get('context', '')}
 
 [2025년 정확한 정보]
 - 상한액: 66,000원, 하한액: 64,192원
-- 조건: 18개월 중 180일 (모두 가입 필요 없음)
+- 조건: 18개월 중 180일 (모두 가입 필요 없음)  
 - 청년/장애 특례: 3개월 가능
 
 전문가로서 정확한 답변 (400자 이내):"""
@@ -615,7 +621,7 @@ RAG 정보: {state.get('context', '')}
                 messages=messages,
                 temperature=temp,
                 max_tokens=300,
-                timeout=15,
+                timeout=10,
             )
 
             raw_answer = completion.choices[0].message.content
@@ -655,13 +661,23 @@ RAG 정보: {state.get('context', '')}
         return ". ".join(result) + "." if result else text[:max_len]
 
     def format_final(self, state: RAGState) -> RAGState:
-        """최종 포맷팅"""
+        """최종 포맷팅 (COMMON_MISTAKES 적용 확인)"""
         state["debug_path"].append("format_final")
 
         answer = state.get("raw_answer", "관련 정보를 찾을 수 없습니다.")
 
+        # COMMON_MISTAKES 확실히 적용
         try:
-            for wrong, correct in config.COMMON_MISTAKES.items():
+            # config의 COMMON_MISTAKES + 추가 보정
+            corrections = {
+                **config.COMMON_MISTAKES,
+                "18개월 모두 가입": "18개월 중 180일 이상",
+                "상한 69,000원": "상한 66,000원",
+                "69,000원": "66,000원",
+                "6만 9천원": "6만 6천원",
+            }
+            
+            for wrong, correct in corrections.items():
                 answer = answer.replace(wrong, correct)
         except:
             pass

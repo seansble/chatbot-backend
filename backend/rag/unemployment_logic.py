@@ -1,11 +1,8 @@
-# backend/rag/unemployment_logic.py - v4.5 (버그 수정 및 개선)
+# backend/rag/unemployment_logic.py - v5.0 (GPT 권고사항 반영)
 """
-실업급여 통합 로직 모듈 v4.5
-
-핵심 수정사항
-- None 방어 코드 추가
-- 포맷팅 에러 방지
-- LLM 검증 게이트 확대
+실업급여 통합 로직 모듈 v5.0
+- 반복수급 최댓값 선택
+- 나이 기본값 25세
 - 청년/장애 특례 정확히 처리
 """
 
@@ -273,7 +270,7 @@ class MorphBasedExtractor:
         return res
 
 # -------------------------------
-# 정규식 코어
+# 정규식 코어 - 반복수급 개선
 # -------------------------------
 class PrecisionVariableExtractor:
     EMPLOYMENT_PATTERNS = {
@@ -338,18 +335,26 @@ class PrecisionVariableExtractor:
             "special_reason": self._special_reason(q),
             "eligible_months": self._months(q),
             "monthly_salary": self._salary(q),
-            "repetition_count": self._repetition(q),
+            "repetition_count": self._repetition(q),  # 개선된 버전
         }
 
     def _age(self, q: str) -> Optional[int]:
-        m = re.search(r"(만\s*)?(\d{2,3})\s*(?:세|살)\b", q)
-        if m: return int(m.group(2))
+        # 패턴 1: "23살", "23세", "만 23세"
+        m = re.search(r"(?:만\s*)?(\d{2,3})\s*(?:세|살)\b", q)
+        if m: return int(m.group(1))
+        
+        # 패턴 2: "20대 초반/중반/후반"
         m = re.search(r"([2-6]0)대\s*(초반|중반|후반)?", q)
         if m: return int(m.group(1)) + (_KO_TENS_WORD.get(m.group(2), 5) if m.group(2) else 5)
+        
+        # 패턴 3: "이십삼세"
         m = re.search(r"([일이삼사오육칠팔구]십)([일이삼사오육칠팔구])?\s*세", q)
         if m: return ko_word_to_int((m.group(1) or "") + (m.group(2) or ""))
+        
+        # 패턴 4: "스물셋", "서른하나"
         m = re.search(r"(스물|서른|마흔|쉰|예순|일흔|여든|아흔)\s*(한|하나|두|둘|세|셋|네|넷|다섯|여섯|일곱|여덟|아홉)?", q)
         if m: return ko_word_to_int((m.group(1) or "") + (m.group(2) or ""))
+        
         return None
 
     def _employment_last(self, q: str) -> Optional[str]:
@@ -421,6 +426,7 @@ class PrecisionVariableExtractor:
         return total or None
 
     def _salary(self, q: str) -> Optional[int]:
+        # 시급 처리
         m = re.search(r"시급\s*(만|천)\s*원?", q)
         if m: return (10000 if m.group(1) == "만" else 1000) * 8 * 22
 
@@ -432,6 +438,7 @@ class PrecisionVariableExtractor:
             elif hourly < 100: hourly *= 10000
             return hourly * 8 * 22
 
+        # 연봉 처리
         m = re.search(r"연봉\s*([일이삼사오육칠팔구]천[일이삼사오육칠팔구]?백?)\s*만?\s*원?", q)
         if m:
             n = ko_compact_number_to_int(m.group(1)) or 0
@@ -440,6 +447,7 @@ class PrecisionVariableExtractor:
         m = re.search(r"연봉\s*(\d{3,4})\s*(?:만원|만|)\b", q)
         if m: return (int(m.group(1)) * 10_000) // 12
 
+        # 월급 처리
         cands: List[Tuple[int, int, int]] = []
         for m in re.finditer(r"([이삼사오육칠팔구]백[일이삼사오육칠팔구십]*)\s*만?\s*원?", q):
             v = ko_hundreds_phrase_to_int(m.group(1))
@@ -462,17 +470,29 @@ class PrecisionVariableExtractor:
         return None
 
     def _repetition(self, q: str) -> Optional[int]:
-        m = re.search(r"(첫|두|세|네|다섯|여섯)\s*번째\s*(받으려|수급하려|받을려|받|수급)", q)
-        if m:
-            return {"첫":1,"두":2,"세":3,"네":4,"다섯":5,"여섯":6}.get(m.group(1))
-        m = re.search(r"(\d)\s*번째\s*(받|수급)", q)
-        if m: return int(m.group(1))
+        """반복수급 횟수 추출 - 최댓값 선택 (GPT 권고 반영)"""
+        counts = []
+        
+        # 패턴 1: "N번째 받으려/수급"
+        for m in re.finditer(r"(첫|두|세|네|다섯|여섯)\s*번째\s*(받으려|수급하려|받을려|받|수급)", q):
+            num = {"첫":1,"두":2,"세":3,"네":4,"다섯":5,"여섯":6}.get(m.group(1))
+            if num:
+                counts.append(num)
+        
+        # 패턴 2: 숫자 "3번째"
+        for m in re.finditer(r"(\d)\s*번째\s*(받|수급)", q):
+            counts.append(int(m.group(1)))
+        
+        # 패턴 3: 붙은 형태
         for word, num in {"첫번째":1,"두번째":2,"세번째":3,"네번째":4,"다섯번째":5,"여섯번째":6}.items():
-            if word in q: return num
-        return None
+            if word in q:
+                counts.append(num)
+        
+        # 최댓값 반환
+        return max(counts) if counts else None
 
 # -------------------------------
-# LLM 검증 클래스 (개선 버전)
+# LLM 검증 클래스 (개선된 버전)
 # -------------------------------
 class LLMVerifier:
     """LLM 기반 변수 검증 및 보정"""
@@ -482,7 +502,7 @@ class LLMVerifier:
         self.cache = {}
         self.enabled = True
         
-        # LLM 클라이언트 초기화 (없으면 생성)
+        # LLM 클라이언트 초기화
         if not self.llm:
             try:
                 from openai import OpenAI
@@ -492,12 +512,12 @@ class LLMVerifier:
                 import config
                 
                 self.llm = OpenAI(
-                    base_url="https://api.together.xyz/v1",
-                    api_key=config.OPENROUTER_API_KEY,
+                    base_url=config.API_BASE_URL,  # TOGETHER_API_KEY 사용
+                    api_key=config.TOGETHER_API_KEY,
                 )
                 self.model = config.MODEL
-                self.timeout = getattr(config, 'LLM_VERIFICATION_TIMEOUT', 3)
-                self.threshold = getattr(config, 'LLM_VERIFICATION_THRESHOLD', 0.75)
+                self.timeout = 5  # 5초 고정
+                self.threshold = getattr(config, 'LLM_VERIFICATION_THRESHOLD', 0.5)
             except Exception as e:
                 logger.error(f"LLM client initialization failed: {e}")
                 self.enabled = False
@@ -508,8 +528,8 @@ class LLMVerifier:
         if not self.enabled:
             return extracted_vars
         
-        # 1. LLM 검증이 필요한지 판단 (확대된 게이트)
-        if not self._needs_verification(extracted_vars, calc_result):
+        # 1. LLM 검증이 필요한지 판단 (개선된 게이트)
+        if not self._needs_verification(query, extracted_vars, calc_result):
             logger.info("LLM verification skipped - confidence high enough")
             return extracted_vars
         
@@ -522,7 +542,7 @@ class LLMVerifier:
         # 3. LLM 프롬프트 생성
         prompt = self._build_prompt(query, extracted_vars, calc_result)
         
-        # 4. LLM 호출
+        # 4. LLM 호출 (재시도 금지)
         try:
             start_time = time.time()
             
@@ -558,18 +578,27 @@ class LLMVerifier:
             logger.error(f"LLM verification failed: {e}")
             return extracted_vars
     
-    def _needs_verification(self, vars: Dict, calc: Dict = None) -> bool:
-        """LLM 검증 필요 여부 판단 (확대된 게이트 조건)"""
+    def _needs_verification(self, query: str, vars: Dict, calc: Dict = None) -> bool:
+        """LLM 검증 필요 여부 판단 (청년/장애 특례 반영)"""
         
-        # 급여가 0원 또는 None
+        # 나이와 장애 여부 확인
+        age = vars.get("age", 25)
+        disability = vars.get("disability", False)
+        is_youth = 18 <= age <= 34
+        
+        # 최소 개월수 계산
+        min_months = 3 if (is_youth or disability) else 6
+        
+        # 급여가 0원이고 금액 표식이 있을 때만
         if not vars.get("monthly_salary") or vars.get("monthly_salary", 0) == 0:
-            logger.info("LLM verification needed: salary is 0 or None")
-            return True
+            if any(word in query for word in ["만원", "백만원", "천만원", "만 원"]):
+                logger.info("LLM verification needed: salary is 0 but amount markers exist")
+                return True
         
-        # 기간이 6개월 미만 또는 None
+        # 기간이 최소 개월수 미만
         months = vars.get("eligible_months")
-        if months is None or months < 6:
-            logger.info(f"LLM verification needed: months is {months}")
+        if months is None or months < min_months:
+            logger.info(f"LLM verification needed: months {months} < min {min_months}")
             return True
         
         # 신뢰도가 낮음
@@ -586,7 +615,7 @@ class LLMVerifier:
             return True
         
         # 반복수급 언급되었는데 카운트 없음
-        if vars.get("special_reason") == "반복수급" and not vars.get("repetition_count"):
+        if any(word in query for word in ["반복", "번째", "수급"]) and not vars.get("repetition_count"):
             logger.info("LLM verification needed: repetition mentioned but no count")
             return True
         
@@ -599,14 +628,6 @@ class LLMVerifier:
     
     def _build_prompt(self, query: str, vars: Dict, calc: Dict = None) -> str:
         """간소화된 프롬프트 생성"""
-        
-        issues = []
-        if not vars.get("monthly_salary") or vars.get("monthly_salary", 0) == 0:
-            issues.append("급여 0원 - 원문에서 급여 찾기")
-        if not vars.get("resignation_category"):
-            issues.append("퇴사사유 불명 - 원문에서 확인")
-        if not vars.get("eligible_months") or vars.get("eligible_months", 0) < 6:
-            issues.append("기간 부족 - 한글 년수 재확인")
         
         prompt = f"""실업급여 변수 검증. JSON만 출력.
 
@@ -627,6 +648,7 @@ class LLMVerifier:
 4. 청년(18-34세)과 장애인은 3개월도 가능
 
 {{
+  "age": 숫자 또는 null,
   "monthly_salary": 숫자 또는 null,
   "eligible_months": 숫자 또는 null,
   "resignation_category": "비자발적"|"정당한자발적"|"자발적"|null,
@@ -650,6 +672,12 @@ class LLMVerifier:
             
             # 스키마 검증
             validated = {}
+            
+            # 나이 (15 ~ 100)
+            if "age" in data and data["age"] is not None:
+                age = int(data["age"])
+                if 15 <= age <= 100:
+                    validated["age"] = age
             
             # 월급 (0 ~ 10,000,000)
             if "monthly_salary" in data and data["monthly_salary"] is not None:
@@ -755,7 +783,7 @@ class UnemploymentLogic:
         self.llm_verifier = LLMVerifier(llm_client)
 
     def extract_variables_with_llm(self, query: str, query_info: Optional[Dict]=None) -> Dict[str, Any]:
-        """변수 추출 + LLM 검증"""
+        """변수 추출 + LLM 검증 (통합 파이프라인)"""
         text = self.pve._normalize(query)
         
         # 1. 기존 추출 로직
@@ -768,14 +796,14 @@ class UnemploymentLogic:
         else:
             extracted = self._extract_traditional(text, query_info)
         
-        # 2. LLM 검증 단계 추가
+        # 2. LLM 검증 단계 추가 (config에서 제어)
         try:
             import sys
             from pathlib import Path
             sys.path.append(str(Path(__file__).parent.parent))
             import config
             
-            if getattr(config, 'LLM_VERIFICATION_ENABLED', True):
+            if getattr(config, 'LLM_VERIFICATION_ENABLED', False):
                 verified = self.llm_verifier.verify_and_correct(query, extracted)
                 return verified
         except Exception as e:
@@ -786,7 +814,7 @@ class UnemploymentLogic:
     def calculate_benefit_days(self, age: int, months: int, disability: bool = False) -> int:
         """수급 일수 계산 (청년/장애 특례 포함)"""
         # None 방어
-        age = int(age or 35)
+        age = int(age or 25)  # 기본값 25세 (청년 특례 가능)
         months = int(months or 0)
         
         if disability and age >= 50:
@@ -809,7 +837,7 @@ class UnemploymentLogic:
         """일 급여액 계산 (청년 가산 포함)"""
         # None 방어
         monthly_salary = int(monthly_salary or 0)
-        age = int(age or 35)
+        age = int(age or 25)
         
         if not monthly_salary:
             return {"daily_base": 0, "daily_benefit": 0, "applied": "계산불가"}
@@ -826,7 +854,7 @@ class UnemploymentLogic:
     def calculate_total_benefit(self, variables: Dict[str, Any]) -> Dict[str, Any]:
         """실업급여 계산 (None 방어 포함)"""
         # None 방어 코드
-        age = int(variables.get("age") or 35)
+        age = int(variables.get("age") or 25)
         salary = int(variables.get("monthly_salary") or 0)
         months = int(variables.get("eligible_months") or 0)
         resignation = variables.get("resignation_category", "")
@@ -908,7 +936,7 @@ class UnemploymentLogic:
         
         return "\n".join(lines)
 
-    # 내부 메서드들 (동일하게 유지, 생략하지 않음)
+    # 내부 메서드들은 동일하게 유지
     def _is_complex_case(self, text: str) -> bool:
         signals = [
             ("첫" in text and ("두번째" in text or "세번째" in text)),
@@ -998,7 +1026,7 @@ class UnemploymentLogic:
                 resignation_category, special_reason = "정당한자발적", "직장내괴롭힘"; break
 
         result = {
-            "age": p.get("age", 35),
+            "age": p.get("age", 25),
             "eligible_months": total_months,
             "monthly_salary": monthly_salary,
             "resignation_category": resignation_category or p.get("resignation_category"),
@@ -1050,7 +1078,7 @@ class UnemploymentLogic:
 
         months = months or 0
         out: Dict[str, Any] = {
-            "age": age if age is not None else 35,
+            "age": age if age is not None else 25,
             "monthly_salary": int(salary) if salary is not None else 0,
             "eligible_months": months,
             "resignation_category": p.get("resignation_category"),
@@ -1128,11 +1156,12 @@ class UnemploymentLogic:
 
     def _compute_confidence(self, result: Dict, used_segmentation: bool) -> Dict:
         conf = {"overall": 0.0, "age": 0.0, "salary": 0.0, "months": 0.0, "resignation": 0.0}
-        if result.get("age") and result["age"] != 35: conf["age"] = 0.9
+        if result.get("age") and result["age"] != 25:  # 25로 변경
+            conf["age"] = 0.9
         if result.get("monthly_salary") and result["monthly_salary"] > 0:
             conf["salary"] = 0.9 if 1_500_000 <= result["monthly_salary"] <= 10_000_000 else 0.6
         if result.get("eligible_months") is not None:
-            conf["months"] = 0.9 if 6 <= int(result["eligible_months"]) <= 360 else 0.5
+            conf["months"] = 0.9 if 3 <= int(result["eligible_months"]) <= 360 else 0.5
         if result.get("resignation_category"): conf["resignation"] = 0.85
         weights = {"age": 0.25, "salary": 0.25, "months": 0.30, "resignation": 0.20}
         overall = sum(conf[k] * weights.get(k, 0) for k in conf if k != "overall")
@@ -1143,7 +1172,7 @@ class UnemploymentLogic:
 
     def _validate(self, r: Dict[str, Any]) -> Dict:
         if r.get("age") and not (15 <= r["age"] <= 100):
-            r["age"] = 35
+            r["age"] = 25  # 25로 변경
         salary = int(r.get("monthly_salary") or 0)
         if salary < 0: salary = 0
         r["monthly_salary"] = salary
